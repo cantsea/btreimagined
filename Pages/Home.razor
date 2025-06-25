@@ -5,62 +5,20 @@
 
 <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6">
     <MudText Typo="Typo.h4" GutterBottom="true" Align="Align.Center">
-        cantseasharp's Unofficial SaltyMC Landing Page!
+        cantseasharp's Unofficial Server Landing Page!
     </MudText>
 
-    <!-- Discord Card -->
-    <MudPaper Elevation="1" Class="p-4 mb-4">
-        <MudText Typo="Typo.h6" GutterBottom="true">Join the SaltyMC Discord</MudText>
-        <MudButton Href="https://discord.gg/Mhjdn4znV2"
-                   Target="_blank"
-                   Variant="Variant.Filled"
-                   EndIcon="@Icons.Custom.Brands.Discord"
-                   Color="Color.Primary"
-                   FullWidth="true">
-            Join Discord
-        </MudButton>
-    </MudPaper>
-
-    <!-- Store Card -->
-    <MudPaper Elevation="1" Class="p-4 mb-4">
-        <MudText Typo="Typo.h6" GutterBottom="true">Official SaltyMC Store</MudText>
-        <MudButton Href="https://store.saltymc.org/"
-                   Target="_blank"
-                   Variant="Variant.Filled"
-                   Color="Color.Secondary"
-                   FullWidth="true">
-            Support the Server!
-        </MudButton>
-    </MudPaper>
-
-    <!-- Voting Card -->
-    <MudPaper Elevation="1" Class="p-4 mb-4">
-        <MudText Typo="Typo.h6" GutterBottom="true">Vote for In-Game Rewards</MudText>
-        <MudStack Spacing="2" Direction="Row" Wrap="Wrap.Wrap">
-            <MudButton Href="https://minecraftservers.org/vote/673166"
-                       Target="_blank"
-                       Variant="Variant.Filled"
-                       Color="Color.Primary">
-                Vote 1
-            </MudButton>
-            <MudButton Href="https://minecraft-server-list.com/server/511458/vote/"
-                       Target="_blank"
-                       Variant="Variant.Filled"
-                       Color="Color.Primary">
-                Vote 2
-            </MudButton>
-            <MudButton Href="https://best-minecraft-servers.co/server-saltymc.28561/vote"
-                       Target="_blank"
-                       Variant="Variant.Filled"
-                       Color="Color.Primary">
-                Vote 3
-            </MudButton>
-            <MudButton Href="https://minecraftbestservers.com/server-saltymc.5099/vote"
-                       Target="_blank"
-                       Variant="Variant.Filled"
-                       Color="Color.Primary">
-                Vote 4
-            </MudButton>
-        </MudStack>
+    <!-- YouTube Embed Section -->
+    <MudPaper Elevation="1" Class="p-4 mt-4">
+        <MudText Typo="Typo.h6" GutterBottom="true">Watch Our Latest Server Trailer</MudText>
+        <MudAspectRatio AspectRatio="16 / 9">
+            <iframe width="560" height="315"
+                    src="https://www.youtube.com/embed/YOUR_VIDEO_ID"
+                    title="YouTube video player"
+                    frameborder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowfullscreen>
+            </iframe>
+        </MudAspectRatio>
     </MudPaper>
 </MudContainer>
