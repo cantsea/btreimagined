@@ -1,0 +1,44 @@
+﻿@page "/faq"
+@using MudBlazor
+
+<PageTitle>FAQ</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6">
+
+    <MudText Typo="Typo.h4" GutterBottom="true" Align="Align.Center">
+        Frequently Asked Questions
+    </MudText>
+
+    @foreach (var sectionTitle in Sections)
+    {
+        <MudCard Outlined="true" Class="mb-4">
+            <MudCardContent>
+                <MudText Typo="Typo.h5" GutterBottom="true">@sectionTitle</MudText>
+                <MudText Typo="Typo.body1">
+                    <ul>
+                        @foreach (var bullet in BulletsBySection[sectionTitle])
+                        {
+                            <li>@bullet</li>
+                        }
+                    </ul>
+                </MudText>
+            </MudCardContent>
+        </MudCard>
+    }
+
+</MudContainer>
+
+@code {
+    private List<string> Sections = new()
+    {
+        "Auction House",
+    };
+
+    private Dictionary<string, List<string>> BulletsBySection = new()
+    {
+        ["Auction House"] = new()
+        {
+            "Sell items using /ah sell [price] [amount of items] [Coins/Experience] **make sure to capitalize Coins/Experience",
+        },
+    };
+}
