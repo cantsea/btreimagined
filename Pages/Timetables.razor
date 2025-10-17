@@ -1,0 +1,203 @@
+﻿@page "/timetables"
+@using MudBlazor
+@using System.Net.Http.Json
+@using System.Text.Json
+@inject HttpClient Http
+
+<PageTitle>FAQ</PageTitle>
+
+<MudContainer MaxWidth="@MaxWidth.Large" Class="mt-6">
+    <MudText Typo="@Typo.h4" GutterBottom="true" Align="@Align.Center">
+        Bus Timetables
+    </MudText>
+
+    <MudPaper Class="p-4 mt-4">
+        <MudGrid>
+            <MudItem xs="12" md="4">
+                <MudSelect T="string" Label="Filter by Route" @bind-Value="_selectedRouteId" Dense="true" Clearable="true">
+                    <MudSelectItem T="string" Value='@("ALL")'>All Routes</MudSelectItem>
+                    @foreach (var r in _routes)
+                    {
+                        <MudSelectItem T="string" Value="@r.Id">@r.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" md="4">
+                <MudTextField @bind-Value="_timeQuery"
+                              Label="Search by Time"
+                              Placeholder="1 PM"
+                              Dense="true"
+                              Adornment="@Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Schedule"
+                              Clearable="true"
+                              Immediate="true"
+                              OnBlurred="@OnTimeBoxBlurred"
+                              OnKeyDown="@OnTimeBoxKeyDown">
+                </MudTextField>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <MudTable Items="_filteredRows" Hover="true" Dense="true" Class="mt-4">
+        <HeaderContent>
+            <MudTh>Route</MudTh>
+            <MudTh>Starting Point</MudTh>
+            <MudTh>Hours of Operation</MudTh>
+            <MudTh>First Departure</MudTh>
+            <MudTh>Last Departure</MudTh>
+            <MudTh>Status</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>
+                <MudStack Row AlignItems="@AlignItems.Center" Spacing="1">
+                    <MudAvatar Size="@Size.Medium" Variant="@Variant.Filled" Class="mr-2">
+                        @context.Short
+                    </MudAvatar>
+                    <MudText>@context.RouteName</MudText>
+                </MudStack>
+            </MudTd>
+            <MudTd>@context.StartingPoint</MudTd>
+            <MudTd>@($"{context.HoursOpen:hh\\:mm} - {context.HoursClose:hh\\:mm}")</MudTd>
+            <MudTd>@context.FirstDeparture</MudTd>
+            <MudTd>@context.LastDeparture</MudTd>
+            <MudTd>
+                <MudChip T="string" Color="@StatusColor(context.Status)" Variant="@Variant.Filled" Size="@Size.Small">
+                    @context.Status
+                </MudChip>
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="p-4" Color="@Color.Secondary">No trips found for the current filters.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudContainer>
+
+@code {
+    private string _selectedRouteId = "ALL";
+    private string? _timeQuery;
+    private bool _use24h = false;
+
+    private sealed record RouteDto(string Id, string Name, string Short);
+    private sealed record TimetableRow(
+        string RouteId, string RouteName, string Short, string StartingPoint,
+        string FirstDeparture, string LastDeparture, string Status,
+        TimeSpan HoursOpen, TimeSpan HoursClose, bool UsesPM
+    );
+
+    private List<RouteDto> _routes = new();
+    private List<TimetableRow> _allRows = new();
+    private IEnumerable<TimetableRow> _filteredRows => FilterRows();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadRoutesAsync();
+        await LoadTimetablesAsync();
+    }
+
+    // ---- Event handlers (method form avoids delegate inference errors)
+    private Task OnTimeBoxBlurred(FocusEventArgs _)
+        => ApplyTimeFilterAsync();
+
+    private Task OnTimeBoxKeyDown(KeyboardEventArgs e)
+        => (e.Key == "Enter") ? ApplyTimeFilterAsync() : Task.CompletedTask;
+
+    private async Task ApplyTimeFilterAsync() => await InvokeAsync(StateHasChanged);
+
+    // ---- Filtering
+    private IEnumerable<TimetableRow> FilterRows()
+    {
+        IEnumerable<TimetableRow> q = _allRows;
+
+        if (!string.IsNullOrWhiteSpace(_selectedRouteId) && _selectedRouteId != "ALL")
+            q = q.Where(r => r.RouteId == _selectedRouteId);
+
+        if (TryParseLooseTime(_timeQuery, out var t))
+            q = q.Where(r => TimeFallsInside(r, t));
+
+        return q.ToList();
+    }
+
+    private static bool TimeFallsInside(TimetableRow row, TimeSpan t)
+    {
+        var open = row.HoursOpen;
+        var close = row.HoursClose;
+        if (close <= open) close += TimeSpan.FromDays(1);
+        var tt = t;
+        if (tt < open) tt += TimeSpan.FromDays(1);
+        return tt >= open && tt <= close;
+    }
+
+    private static Color StatusColor(string status) => status switch
+    {
+        "On Time" => Color.Success,
+        "Early" => Color.Info,
+        "Late" => Color.Error,
+        _ => Color.Default
+    };
+
+    private static bool TryParseLooseTime(string? input, out TimeSpan time)
+    {
+        time = default;
+        if (string.IsNullOrWhiteSpace(input)) return false;
+        if (DateTime.TryParse(input.Trim(), out var dt)) { time = dt.TimeOfDay; return true; }
+        if (int.TryParse(input.Trim(), out var hour) && hour is >= 0 and <= 23) { time = new(hour, 0, 0); return true; }
+        return false;
+    }
+
+    // ---- API (replace with your endpoints or proxy)
+    private const string ApiBase = "https://ridebt.org";
+    private const string RoutesEndpoint = $"{ApiBase}/api/routes";
+    private const string TimetablesEndpoint = $"{ApiBase}/api/timetables";
+
+    private async Task LoadRoutesAsync()
+    {
+        try
+        {
+            var routes = await Http.GetFromJsonAsync<List<RouteDto>>(RoutesEndpoint);
+            _routes = routes ?? new();
+        }
+        catch { _routes = new(); }
+    }
+
+    private async Task LoadTimetablesAsync()
+    {
+        try
+        {
+            var raw = await Http.GetFromJsonAsync<List<JsonElement>>(TimetablesEndpoint);
+            _allRows = await MapToRowsAsync(raw ?? new());
+        }
+        catch { _allRows = new(); }
+    }
+
+    private Task<List<TimetableRow>> MapToRowsAsync(List<JsonElement> items)
+    {
+        var list = new List<TimetableRow>();
+        foreach (var el in items)
+        {
+            string routeId = el.TryGetProperty("routeId", out var p1) ? p1.GetString() ?? "" : "";
+            string routeName = el.TryGetProperty("routeName", out var p2) ? p2.GetString() ?? "" : "";
+            string shortName = el.TryGetProperty("short", out var p3) ? p3.GetString() ?? "" : "";
+            string startPoint = el.TryGetProperty("startingPoint", out var p4) ? p4.GetString() ?? "" : "";
+            string first = el.TryGetProperty("firstDeparture", out var p5) ? p5.GetString() ?? "" : "";
+            string last = el.TryGetProperty("lastDeparture", out var p6) ? p6.GetString() ?? "" : "";
+            string status = el.TryGetProperty("status", out var p7) ? p7.GetString() ?? "On Time" : "On Time";
+            string openS = el.TryGetProperty("hoursOpen", out var p8) ? p8.GetString() ?? "07:00" : "07:00";
+            string closeS = el.TryGetProperty("hoursClose", out var p9) ? p9.GetString() ?? "19:00" : "19:00";
+
+            TimeSpan open = TimeSpan.TryParse(openS, out var o) ? o : TimeSpan.FromHours(7);
+            TimeSpan close = TimeSpan.TryParse(closeS, out var c) ? c : TimeSpan.FromHours(19);
+
+            list.Add(new TimetableRow(
+                routeId,
+                string.IsNullOrWhiteSpace(routeName) ? shortName : routeName,
+                string.IsNullOrWhiteSpace(shortName) ? (routeName?.Split(' ').FirstOrDefault() ?? "?") : shortName,
+                startPoint,
+                string.IsNullOrWhiteSpace(first) ? "-" : first,
+                string.IsNullOrWhiteSpace(last) ? "-" : last,
+                status, open, close, UsesPM: true
+            ));
+        }
+        return Task.FromResult(list);
+    }
+}
