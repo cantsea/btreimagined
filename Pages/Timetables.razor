@@ -12,59 +12,44 @@
     <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-16 mb-10">
         <MudStack AlignItems="AlignItems.Center" JustifyContent="Justify.Center" Style="min-height:40vh;">
             <MudProgressCircular Size="Size.Large" Indeterminate="true" />
-            <MudText Typo="Typo.subtitle1" Class="mt-2" Color="Color.Secondary">Loading timetable…</MudText>
         </MudStack>
     </MudContainer>
 }
 else
 {
-    <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6 mb-10">
-        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">
-            Blacksburg Transit Routes
-        </MudText>
+    <MudPaper Elevation="5" Outlined="true" Class="pa-3">
+        <!-- Fixed logical width so mobile scrolls horizontally instead of squishing -->
+        <MudGrid Spacing="2" Class="items-center" Style="min-width: 960px;">
+            <!-- Header (Route header contains a dropdown selector) -->
+            <MudItem xs="5">
+                <MudSelect T="string"
+                           Label="Route"
+                           Dense="true"
+                           Value="@_selectedShort"
+                           ValueChanged="@OnRouteChanged"
+                           Class="w-full">
+                    <MudSelectItem Value="@AllRoutesValue">All Routes</MudSelectItem>
+                    @foreach (var r in _rows)
+                    {
+                        <MudSelectItem Value="@r.Short">@r.Name (@r.Short)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
 
-        <!-- Filter -->
-        <MudPaper Class="p-4 mb-3" Elevation="2">
-            <MudSelect T="RouteRow"
-                       Label="Filter by Route"
-                       Value="@_selected"
-                       ValueChanged="@OnRouteChanged"
-                       Dense="true"
-                       Clearable="true"
-                       Class="w-full">
-                @foreach (var r in _rows)
-                {
-                    <MudSelectItem Value="@r">
-                        <div style="@($"display:flex;align-items:center;gap:8px;color:#{r.RouteTextColor};background-color:#{r.RouteColor};padding:4px 8px;border-radius:6px;")">
-                            <span>@r.Name</span>
-                            <span style="opacity:.8;">(@r.Short)</span>
-                        </div>
-                    </MudSelectItem>
-                }
-            </MudSelect>
-        </MudPaper>
+            <MudItem xs="2"><MudText Typo="Typo.subtitle1" Class="fw-bold">Shorthand</MudText></MudItem>
+            <MudItem xs="3"><MudText Typo="Typo.subtitle1" Class="fw-bold">Hours of Operation</MudText></MudItem>
+            <MudItem xs="2"><MudText Typo="Typo.subtitle1" Class="fw-bold">Status</MudText></MudItem>
 
-        <!-- Header -->
-        <MudCard Outlined="true" Class="mb-0" Style="border-bottom-left-radius:0;border-bottom-right-radius:0;">
-            <MudCardContent Class="py-2">
-                <MudGrid Class="items-center">
-                    <MudItem xs="5"><MudText Typo="Typo.subtitle1" Style="font-weight:700;">Route</MudText></MudItem>
-                    <MudItem xs="2"><MudText Typo="Typo.subtitle1" Style="font-weight:700;">Shorthand</MudText></MudItem>
-                    <MudItem xs="3"><MudText Typo="Typo.subtitle1" Style="font-weight:700;">Hours of Operation</MudText></MudItem>
-                    <MudItem xs="2"><MudText Typo="Typo.subtitle1" Style="font-weight:700;">Status</MudText></MudItem>
-                </MudGrid>
-            </MudCardContent>
-        </MudCard>
+            <MudItem xs="12"><MudDivider Class="my-2" /></MudItem>
 
-        <!-- Rows -->
-        @for (var i = 0; i < _filtered.Count; i++)
-        {
-            var r = _filtered[i];
-            var bg = i % 2 == 0 ? "#ffffff" : "#f7f7fb";
+            <!-- Rows -->
+            @for (var i = 0; i < _filtered.Count; i++)
+            {
+                var r = _filtered[i];
+                var bg = i % 2 == 0 ? "#ffffff" : "#f7f7fb";
 
-            <MudCard Outlined="true" Style="@($"background:{bg};border-radius:0;box-shadow:none;border-top:0;")">
-                <MudCardContent Class="py-2 px-3">
-                    <MudGrid Class="items-center">
+                <MudItem xs="12" Style="@($"background:{bg};")">
+                    <MudGrid Spacing="2" Class="items-center">
                         <MudItem xs="5">
                             <MudText Typo="Typo.body1" Style="@($"color: #{r.RouteColor}; font-weight:600;")">
                                 @r.Name
@@ -72,8 +57,7 @@ else
                         </MudItem>
 
                         <MudItem xs="2">
-                            <MudChip T="string"
-                                     Variant="Variant.Outlined"
+                            <MudChip T="string" Variant="Variant.Outlined"
                                      Style="@($"background-color: #{r.RouteColor}; color: #{r.RouteTextColor}; font-weight:600;")">
                                 @r.Short
                             </MudChip>
@@ -91,21 +75,24 @@ else
                             </MudChip>
                         </MudItem>
                     </MudGrid>
-                </MudCardContent>
-            </MudCard>
-        }
-    </MudContainer>
+                </MudItem>
+            }
+        </MudGrid>
+    </MudPaper>
 }
 
 @code {
     // ---------- CONFIG ----------
     private const string WorkerBase = "https://blue-disk-457f.fionncmurphy.workers.dev/api/bt4u";
-    private const int MaxTrips = 999;                    // all trips for the day
-    private const int MaxParallel = 6;                   // per-route concurrency cap
+    private const int MaxTrips = 999;
+    private const int MaxParallel = 6;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
     private static readonly string ServiceDateIso = DateTime.Today.ToString("yyyy-MM-dd");
 
-    // ---------- MODELS ----------
+    // Sentinel for "All Routes"
+    private const string AllRoutesValue = "__ALL__";
+
+    // ---------- MODEL ----------
     private sealed record RouteRow(
         string Short, string Name, string RouteColor, string RouteTextColor,
         string HoursOfOperation, string Status
@@ -114,12 +101,12 @@ else
     // ---------- STATE ----------
     private readonly List<RouteRow> _rows = new();
     private List<RouteRow> _filtered = new();
-    private RouteRow? _selected;
+    private string _selectedShort = AllRoutesValue; // default to All Routes
     private bool _loading = true;
 
-    // Cache for first scheduled stop per route
     private readonly Dictionary<string, string> _firstStopCodeCache = new(StringComparer.OrdinalIgnoreCase);
 
+    // ---------- LIFECYCLE ----------
     protected override async Task OnInitializedAsync()
     {
         try
@@ -134,15 +121,13 @@ else
         }
     }
 
-    // ---------- LOAD ROUTES + HOURS + STATUS ----------
+    // ---------- DATA LOAD ----------
     private async Task LoadRoutesAndStatsAsync()
     {
         try
         {
             using var cts = new CancellationTokenSource(RequestTimeout);
-            var routesRoot = await Http.GetFromJsonAsync<JsonElement>(
-                $"{WorkerBase}?method=GetCurrentRoutes", cts.Token);
-
+            var routesRoot = await Http.GetFromJsonAsync<JsonElement>($"{WorkerBase}?method=GetCurrentRoutes", cts.Token);
             var routes = ParseRoutes(routesRoot);
 
             _rows.Clear();
@@ -158,40 +143,37 @@ else
                     await Task.WhenAll(timesTask, statusTask);
 
                     var times = timesTask.Result;
-                    var hours = times.Count > 0
-                        ? $"{times.Min():h:mm tt} - {times.Max():h:mm tt}"
-                        : "—";
-
+                    var hours = times.Count > 0 ? $"{times.Min():h:mm tt} - {times.Max():h:mm tt}" : "—";
                     var status = statusTask.Result;
 
                     lock (_rows)
-                    {
                         _rows.Add(new RouteRow(r.Short, r.Name, r.RouteColor, r.RouteTextColor, hours, status));
-                    }
                 }
                 catch
                 {
                     lock (_rows)
-                    {
                         _rows.Add(new RouteRow(r.Short, r.Name, r.RouteColor, r.RouteTextColor, "—", "On Time"));
-                    }
                 }
-                finally
-                {
-                    sem.Release();
-                }
+                finally { sem.Release(); }
             }).ToArray();
 
             await Task.WhenAll(tasks);
             _rows.Sort((a, b) => string.Compare(a.Short, b.Short, StringComparison.OrdinalIgnoreCase));
         }
-        catch
-        {
-            _rows.Clear();
-        }
+        catch { _rows.Clear(); }
     }
 
-    // ---------- HOURS OF OPERATION (ISO/XML exact fields) ----------
+    // ---------- FILTER ----------
+    private async Task OnRouteChanged(string? shortName)
+    {
+        _selectedShort = string.IsNullOrWhiteSpace(shortName) ? AllRoutesValue : shortName;
+        _filtered = _selectedShort == AllRoutesValue
+            ? new(_rows)
+            : _rows.Where(r => r.Short.Equals(_selectedShort, StringComparison.OrdinalIgnoreCase)).ToList();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // ---------- HOURS ----------
     private async Task<List<DateTime>> GetRouteTimesIsoAsync(string routeShortName)
     {
         try
@@ -199,20 +181,17 @@ else
             using var cts = new CancellationTokenSource(RequestTimeout);
             var url = $"{WorkerBase}?method=GetArrivalAndDepartureTimesForRoutes" +
                       $"&routeShortNames={Uri.EscapeDataString(routeShortName)}" +
-                      $"&serviceDate={ServiceDateIso}" +
-                      $"&noOfTrips={MaxTrips}";
+                      $"&serviceDate={ServiceDateIso}&noOfTrips={MaxTrips}";
             var root = await Http.GetFromJsonAsync<JsonElement>(url, cts.Token);
             return ExtractTimes(root);
         }
         catch { return new(); }
     }
 
-    // Extract only CalculatedDepartureTime / CalculatedArrivalTime (ISO8601 with offset)
     private static List<DateTime> ExtractTimes(JsonElement root)
     {
         var results = new List<DateTime>();
 
-        // JSON array (if worker ever returns rows as JSON)
         if (root.ValueKind == JsonValueKind.Array)
         {
             foreach (var row in root.EnumerateArray())
@@ -220,7 +199,6 @@ else
                 foreach (var p in row.EnumerateObject())
                 {
                     if (p.Value.ValueKind != JsonValueKind.String) continue;
-
                     var name = p.Name;
                     if (name.Equals("CalculatedDepartureTime", StringComparison.OrdinalIgnoreCase) ||
                         name.Equals("CalculatedArrivalTime", StringComparison.OrdinalIgnoreCase))
@@ -233,15 +211,12 @@ else
             return CleanupTimes(results);
         }
 
-        // XML string wrapped in { "xml": "<DocumentElement>..." }
         if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
         {
             var xml = xmlNode.GetString();
             if (!string.IsNullOrWhiteSpace(xml))
             {
                 var x = XDocument.Parse(xml);
-
-                // Only pull the calculated times; ignore legacy StartTime
                 var times =
                     x.Descendants("DeparturesForRoute")
                      .SelectMany(n => new[]
@@ -252,23 +227,20 @@ else
                      .Where(s => !string.IsNullOrWhiteSpace(s));
 
                 foreach (var s in times!)
-                {
                     if (TryParseTime(s, out var dt)) results.Add(dt);
-                }
             }
         }
 
         return CleanupTimes(results);
     }
 
-    // ---------- STATUS (uses next departure at first scheduled stop) ----------
+    // ---------- STATUS ----------
     private async Task<string> GetStatusAsync(string routeShortName)
     {
         try
         {
             var stopCode = await GetFirstStopCodeAsync(routeShortName);
-            if (string.IsNullOrWhiteSpace(stopCode))
-                return "On Time";
+            if (string.IsNullOrWhiteSpace(stopCode)) return "On Time";
 
             using var cts = new CancellationTokenSource(RequestTimeout);
             var nextRoot = await Http.GetFromJsonAsync<JsonElement>(
@@ -283,8 +255,7 @@ else
                 return "On Time";
             }
         }
-        catch { /* ignore */ }
-
+        catch { }
         return "On Time";
     }
 
@@ -309,15 +280,8 @@ else
         catch { return ""; }
     }
 
-    // ---------- UI / HELPERS ----------
-    private async Task OnRouteChanged(RouteRow? value)
-    {
-        _selected = value;
-        _filtered = _selected is null ? new(_rows) : _rows.Where(r => r.Short == _selected.Short).ToList();
-        await InvokeAsync(StateHasChanged);
-    }
-
-    private static Color StatusChipColor(string s) => s switch
+    // ---------- PARSERS ----------
+    private static Color StatusColor(string s) => s switch
     {
         "Running Early" => Color.Info,
         "Running Late" => Color.Error,
@@ -325,9 +289,6 @@ else
         _ => Color.Default
     };
 
-    private static Color StatusColor(string s) => StatusChipColor(s);
-
-    // ---------- Parsers ----------
     private static List<(string Short, string Name, string RouteColor, string RouteTextColor)> ParseRoutes(JsonElement root)
     {
         var list = new List<(string, string, string, string)>();
@@ -388,7 +349,6 @@ else
         scheduled = default;
         predicted = default;
 
-        // JSON array
         if (root.ValueKind == JsonValueKind.Array)
         {
             foreach (var row in root.EnumerateArray())
@@ -397,7 +357,6 @@ else
                 if (sch != default && est != default) { scheduled = sch; predicted = est; return true; }
             }
         }
-        // XML wrapper
         else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
         {
             var xml = xmlNode.GetString() ?? "";
@@ -446,7 +405,7 @@ else
 
     private static bool TryParseTime(string? s, out DateTime dt) => TryParseDate(s, out dt);
 
-    // STRICT: API returns ISO 8601 with offset, e.g. 2025-10-20T21:47:02-04:00
+    // STRICT ISO 8601 with offset (e.g., 2025-10-20T21:47:02-04:00)
     private static bool TryParseDate(string? s, out DateTime dt)
     {
         dt = default;
@@ -459,20 +418,17 @@ else
                 System.Globalization.DateTimeStyles.None,
                 out var dto))
         {
-            dt = dto.LocalDateTime; // convert to local for display (DST-safe)
+            dt = dto.LocalDateTime;
             return true;
         }
-
         return false;
     }
 
     private static List<DateTime> CleanupTimes(List<DateTime> times)
     {
-        // Drop “midnight placeholders” if real times exist
         if (times.Any(t => t.TimeOfDay != TimeSpan.Zero))
             times = times.Where(t => t.TimeOfDay != TimeSpan.Zero).ToList();
 
-        // Drop obvious legacy/sentinel years if they sneak in
         times = times.Where(t => t.Year >= 2000).ToList();
 
         return times.Distinct().OrderBy(t => t).ToList();
