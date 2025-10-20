@@ -1,391 +1,480 @@
-﻿@page "/Timetables"
+﻿@page "/"
 @using MudBlazor
 @using System.Net.Http.Json
 @using System.Text.Json
-@using Microsoft.AspNetCore.Components.Web
 @using System.Xml.Linq
 @inject HttpClient Http
 
-<PageTitle>Timetables</PageTitle>
+<PageTitle>Bus Routes</PageTitle>
 
-<MudContainer MaxWidth="@MaxWidth.Large" Class="mt-6">
-    <MudText Typo="@Typo.h4" GutterBottom="true" Align="@Align.Center">
-        Bus Timetables
-    </MudText>
+@if (_loading)
+{
+    <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-16 mb-10">
+        <MudStack AlignItems="AlignItems.Center" JustifyContent="Justify.Center" Style="min-height:40vh;">
+            <MudProgressCircular Size="Size.Large" Indeterminate="true" />
+            <MudText Typo="Typo.subtitle1" Class="mt-2" Color="Color.Secondary">Loading timetable…</MudText>
+        </MudStack>
+    </MudContainer>
+}
+else
+{
+    <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6 mb-10">
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">
+            Blacksburg Transit Routes
+        </MudText>
 
-    <MudPaper Class="p-4 mt-4">
-        <MudGrid>
-            <MudItem xs="12" md="4">
-                <MudSelect T="string" Label="Filter by Route" @bind-Value="_selectedRouteId" Dense="true" Clearable="true">
-                    <MudSelectItem T="string" Value='@("ALL")'>All Routes</MudSelectItem>
-                    @foreach (var r in _routes)
-                    {
-                        <MudSelectItem T="string" Value="@r.Id">@r.Name</MudSelectItem>
-                    }
-                </MudSelect>
-            </MudItem>
+        <!-- Filter -->
+        <MudPaper Class="p-4 mb-3" Elevation="2">
+            <MudSelect T="RouteRow"
+                       Label="Filter by Route"
+                       Value="@_selected"
+                       ValueChanged="@OnRouteChanged"
+                       Dense="true"
+                       Clearable="true"
+                       Class="w-full">
+                @foreach (var r in _rows)
+                {
+                    <MudSelectItem Value="@r">
+                        <div style="@($"display:flex;align-items:center;gap:8px;color:#{r.RouteTextColor};background-color:#{r.RouteColor};padding:4px 8px;border-radius:6px;")">
+                            <span>@r.Name</span>
+                            <span style="opacity:.8;">(@r.Short)</span>
+                        </div>
+                    </MudSelectItem>
+                }
+            </MudSelect>
+        </MudPaper>
 
-            <MudItem xs="12" md="4">
-                <MudTextField @bind-Value="_timeQuery"
-                              Label="Search by Time"
-                              Placeholder="1 PM"
-                              Dense="true"
-                              Adornment="@Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Filled.Schedule"
-                              Clearable="true"
-                              Immediate="true"
-                              OnBlurred="@OnTimeBoxBlurred"
-                              OnKeyDown="@OnTimeBoxKeyDown">
-                </MudTextField>
-            </MudItem>
-        </MudGrid>
-    </MudPaper>
+        <!-- Header -->
+        <MudCard Outlined="true" Class="mb-0" Style="border-bottom-left-radius:0;border-bottom-right-radius:0;">
+            <MudCardContent Class="py-2">
+                <MudGrid Class="items-center">
+                    <MudItem xs="5"><MudText Typo="Typo.subtitle1" Style="font-weight:700;">Route</MudText></MudItem>
+                    <MudItem xs="2"><MudText Typo="Typo.subtitle1" Style="font-weight:700;">Shorthand</MudText></MudItem>
+                    <MudItem xs="3"><MudText Typo="Typo.subtitle1" Style="font-weight:700;">Hours of Operation</MudText></MudItem>
+                    <MudItem xs="2"><MudText Typo="Typo.subtitle1" Style="font-weight:700;">Status</MudText></MudItem>
+                </MudGrid>
+            </MudCardContent>
+        </MudCard>
 
-    <MudTable Items="_filteredRows" Hover="true" Dense="true" Class="mt-4">
-        <HeaderContent>
-            <MudTh>Route</MudTh>
-            <MudTh>Starting Point</MudTh>
-            <MudTh>Hours of Operation</MudTh>
-            <MudTh>First Departure</MudTh>
-            <MudTh>Last Departure</MudTh>
-            <MudTh>Status</MudTh>
-        </HeaderContent>
-        <RowTemplate>
-            <MudTd>
-                <MudStack Row AlignItems="@AlignItems.Center" Spacing="1">
-                    <MudAvatar Size="@Size.Medium" Variant="@Variant.Filled" Class="mr-2">
-                        @context.Short
-                    </MudAvatar>
-                    <MudText>@context.RouteName</MudText>
-                </MudStack>
-            </MudTd>
-            <MudTd>@context.StartingPoint</MudTd>
-            <MudTd>@($"{ToClock(context.HoursOpen)} - {ToClock(context.HoursClose)}")</MudTd>
-            <MudTd>@context.FirstDeparture</MudTd>
-            <MudTd>@context.LastDeparture</MudTd>
-            <MudTd>
-                <MudChip T="string" Color="@StatusColor(context.Status)" Variant="@Variant.Filled" Size="@Size.Small">
-                    @context.Status
-                </MudChip>
-            </MudTd>
-        </RowTemplate>
-        <NoRecordsContent>
-            <MudText Class="p-4" Color="@Color.Secondary">No trips found for the current filters.</MudText>
-        </NoRecordsContent>
-    </MudTable>
-</MudContainer>
+        <!-- Rows -->
+        @for (var i = 0; i < _filtered.Count; i++)
+        {
+            var r = _filtered[i];
+            var bg = i % 2 == 0 ? "#ffffff" : "#f7f7fb";
+
+            <MudCard Outlined="true" Style="@($"background:{bg};border-radius:0;box-shadow:none;border-top:0;")">
+                <MudCardContent Class="py-2 px-3">
+                    <MudGrid Class="items-center">
+                        <MudItem xs="5">
+                            <MudText Typo="Typo.body1" Style="@($"color: #{r.RouteColor}; font-weight:600;")">
+                                @r.Name
+                            </MudText>
+                        </MudItem>
+
+                        <MudItem xs="2">
+                            <MudChip T="string"
+                                     Variant="Variant.Outlined"
+                                     Style="@($"background-color: #{r.RouteColor}; color: #{r.RouteTextColor}; font-weight:600;")">
+                                @r.Short
+                            </MudChip>
+                        </MudItem>
+
+                        <MudItem xs="3">
+                            <MudText Typo="Typo.body1" Color="Color.Secondary">
+                                @r.HoursOfOperation
+                            </MudText>
+                        </MudItem>
+
+                        <MudItem xs="2">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="@StatusColor(r.Status)">
+                                @r.Status
+                            </MudChip>
+                        </MudItem>
+                    </MudGrid>
+                </MudCardContent>
+            </MudCard>
+        }
+    </MudContainer>
+}
 
 @code {
-    // ====== CONFIG: your Cloudflare Worker that proxies BT4U ======
+    // ---------- CONFIG ----------
     private const string WorkerBase = "https://blue-disk-457f.fionncmurphy.workers.dev/api/bt4u";
+    private const int MaxTrips = 999;                    // all trips for the day
+    private const int MaxParallel = 6;                   // per-route concurrency cap
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
+    private static readonly string ServiceDateIso = DateTime.Today.ToString("yyyy-MM-dd");
 
-    private string _selectedRouteId = "ALL";
-    private string? _timeQuery;
-    private bool _use24h = false;
-
-    private sealed record RouteDto(string Id, string Name, string Short);
-    private sealed record TimetableRow(
-        string RouteId, string RouteName, string Short, string StartingPoint,
-        string FirstDeparture, string LastDeparture, string Status,
-        TimeSpan HoursOpen, TimeSpan HoursClose, bool UsesPM
+    // ---------- MODELS ----------
+    private sealed record RouteRow(
+        string Short, string Name, string RouteColor, string RouteTextColor,
+        string HoursOfOperation, string Status
     );
 
-    private List<RouteDto> _routes = new();
-    private List<TimetableRow> _allRows = new();
-    private readonly HashSet<string> _activeRoutes = new(StringComparer.OrdinalIgnoreCase);
-    private IEnumerable<TimetableRow> _filteredRows => FilterRows();
+    // ---------- STATE ----------
+    private readonly List<RouteRow> _rows = new();
+    private List<RouteRow> _filtered = new();
+    private RouteRow? _selected;
+    private bool _loading = true;
 
-    // ========= LIFECYCLE =========
+    // Cache for first scheduled stop per route
+    private readonly Dictionary<string, string> _firstStopCodeCache = new(StringComparer.OrdinalIgnoreCase);
+
     protected override async Task OnInitializedAsync()
     {
-        await LoadRoutesAsync();
-        await LoadTimetablesAsync();
-        await LoadActiveBusesAsync();
-        StateHasChanged();
-    }
-
-    // ========= UI EVENTS =========
-    private Task OnTimeBoxBlurred(FocusEventArgs _) => ApplyTimeFilterAsync();
-    private Task OnTimeBoxKeyDown(KeyboardEventArgs e)
-        => (e.Key == "Enter") ? ApplyTimeFilterAsync() : Task.CompletedTask;
-    private Task ApplyTimeFilterAsync() => InvokeAsync(StateHasChanged);
-
-    // ========= FILTERING =========
-    private IEnumerable<TimetableRow> FilterRows()
-    {
-        IEnumerable<TimetableRow> q = _allRows;
-
-        if (!string.IsNullOrWhiteSpace(_selectedRouteId) && _selectedRouteId != "ALL")
-            q = q.Where(r => r.RouteId == _selectedRouteId);
-
-        if (TryParseLooseTime(_timeQuery, out var t))
-            q = q.Where(r => TimeFallsInside(r, t));
-
-        return q.ToList();
-    }
-
-    private static bool TimeFallsInside(TimetableRow row, TimeSpan t)
-    {
-        var open = row.HoursOpen;
-        var close = row.HoursClose;
-        if (close <= open) close += TimeSpan.FromDays(1);
-        var tt = t;
-        if (tt < open) tt += TimeSpan.FromDays(1);
-        return tt >= open && tt <= close;
-    }
-
-    private static Color StatusColor(string status) => status switch
-    {
-        "Active" => Color.Success,
-        "On Time" => Color.Success,
-        "Early" => Color.Info,
-        "Late" => Color.Error,
-        "No Active Bus" => Color.Secondary,
-        _ => Color.Default
-    };
-
-    private static bool TryParseLooseTime(string? input, out TimeSpan time)
-    {
-        time = default;
-        if (string.IsNullOrWhiteSpace(input)) return false;
-        if (DateTime.TryParse(input.Trim(), out var dt)) { time = dt.TimeOfDay; return true; }
-        if (int.TryParse(input.Trim(), out var hour) && hour is >= 0 and <= 23) { time = new(hour, 0, 0); return true; }
-        return false;
-    }
-
-    private static string ToClock(TimeSpan t) => DateTime.Today.Add(t).ToString("h:mm tt");
-
-    // ========= API LOADS =========
-
-    private async Task LoadRoutesAsync()
-    {
         try
         {
-            var url = $"{WorkerBase}?method=GetCurrentRoutes";
-            var root = await Http.GetFromJsonAsync<JsonElement>(url);
-            _routes = ParseRoutes(root);
+            await LoadRoutesAndStatsAsync();
+            _filtered = new(_rows);
         }
-        catch { _routes = new(); }
+        finally
+        {
+            _loading = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
-    private async Task LoadTimetablesAsync()
+    // ---------- LOAD ROUTES + HOURS + STATUS ----------
+    private async Task LoadRoutesAndStatsAsync()
     {
         try
         {
-            _allRows = new();
-            var serviceDate = DateTime.Today;
-            const int NoOfTrips = 999;
+            using var cts = new CancellationTokenSource(RequestTimeout);
+            var routesRoot = await Http.GetFromJsonAsync<JsonElement>(
+                $"{WorkerBase}?method=GetCurrentRoutes", cts.Token);
 
-            foreach (var r in _routes)
+            var routes = ParseRoutes(routesRoot);
+
+            _rows.Clear();
+
+            using var sem = new SemaphoreSlim(MaxParallel);
+            var tasks = routes.Select(async r =>
             {
-                // Try ISO date, then US date if needed
-                var urlIso =
-                    $"{WorkerBase}?method=GetArrivalAndDepartureTimesForRoutes" +
-                    $"&routeShortNames={Uri.EscapeDataString(r.Id)}" +
-                    $"&serviceDate={serviceDate:yyyy-MM-dd}" +
-                    $"&noOfTrips={NoOfTrips}";
-
-                JsonElement doc;
+                await sem.WaitAsync();
                 try
                 {
-                    doc = await Http.GetFromJsonAsync<JsonElement>(urlIso);
+                    var timesTask = GetRouteTimesIsoAsync(r.Short);
+                    var statusTask = GetStatusAsync(r.Short);
+                    await Task.WhenAll(timesTask, statusTask);
+
+                    var times = timesTask.Result;
+                    var hours = times.Count > 0
+                        ? $"{times.Min():h:mm tt} - {times.Max():h:mm tt}"
+                        : "—";
+
+                    var status = statusTask.Result;
+
+                    lock (_rows)
+                    {
+                        _rows.Add(new RouteRow(r.Short, r.Name, r.RouteColor, r.RouteTextColor, hours, status));
+                    }
                 }
                 catch
                 {
-                    var urlUs =
-                        $"{WorkerBase}?method=GetArrivalAndDepartureTimesForRoutes" +
-                        $"&routeShortNames={Uri.EscapeDataString(r.Id)}" +
-                        $"&serviceDate={serviceDate:MM/dd/yyyy}" +
-                        $"&noOfTrips={NoOfTrips}";
-                    doc = await Http.GetFromJsonAsync<JsonElement>(urlUs);
+                    lock (_rows)
+                    {
+                        _rows.Add(new RouteRow(r.Short, r.Name, r.RouteColor, r.RouteTextColor, "—", "On Time"));
+                    }
                 }
+                finally
+                {
+                    sem.Release();
+                }
+            }).ToArray();
 
-                var times = ExtractTimes(doc, out var firstStopName);
-                if (times.Count == 0) continue;
-
-                var first = times.Min();
-                var last = times.Max();
-                var status = _activeRoutes.Contains(r.Id) ? "Active" : "No Active Bus";
-
-                _allRows.Add(new TimetableRow(
-                    r.Id, r.Name, r.Short,
-                    StartingPoint: string.IsNullOrWhiteSpace(firstStopName) ? "—" : firstStopName,
-                    FirstDeparture: first.ToString("h:mm tt"),
-                    LastDeparture: last.ToString("h:mm tt"),
-                    Status: status,
-                    HoursOpen: first.TimeOfDay,
-                    HoursClose: last.TimeOfDay,
-                    UsesPM: true
-                ));
-            }
+            await Task.WhenAll(tasks);
+            _rows.Sort((a, b) => string.Compare(a.Short, b.Short, StringComparison.OrdinalIgnoreCase));
         }
-        catch { _allRows = new(); }
+        catch
+        {
+            _rows.Clear();
+        }
     }
 
-    private async Task LoadActiveBusesAsync()
+    // ---------- HOURS OF OPERATION (ISO/XML exact fields) ----------
+    private async Task<List<DateTime>> GetRouteTimesIsoAsync(string routeShortName)
     {
         try
         {
-            _activeRoutes.Clear();
-            var url = $"{WorkerBase}?method=GetCurrentBusInfo";
-            var root = await Http.GetFromJsonAsync<JsonElement>(url);
+            using var cts = new CancellationTokenSource(RequestTimeout);
+            var url = $"{WorkerBase}?method=GetArrivalAndDepartureTimesForRoutes" +
+                      $"&routeShortNames={Uri.EscapeDataString(routeShortName)}" +
+                      $"&serviceDate={ServiceDateIso}" +
+                      $"&noOfTrips={MaxTrips}";
+            var root = await Http.GetFromJsonAsync<JsonElement>(url, cts.Token);
+            return ExtractTimes(root);
+        }
+        catch { return new(); }
+    }
 
-            if (root.ValueKind == JsonValueKind.Array)
+    // Extract only CalculatedDepartureTime / CalculatedArrivalTime (ISO8601 with offset)
+    private static List<DateTime> ExtractTimes(JsonElement root)
+    {
+        var results = new List<DateTime>();
+
+        // JSON array (if worker ever returns rows as JSON)
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var row in root.EnumerateArray())
             {
-                foreach (var v in root.EnumerateArray())
+                foreach (var p in row.EnumerateObject())
                 {
-                    if (v.TryGetProperty("RouteShortName", out var a) && !string.IsNullOrWhiteSpace(a.GetString()))
-                        _activeRoutes.Add(a.GetString()!);
-                    else if (v.TryGetProperty("routeShortName", out var b) && !string.IsNullOrWhiteSpace(b.GetString()))
-                        _activeRoutes.Add(b.GetString()!);
-                }
-            }
-            else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
-            {
-                var xml = xmlNode.GetString();
-                if (!string.IsNullOrWhiteSpace(xml))
-                {
-                    var x = XDocument.Parse(xml);
-                    foreach (var e in x.Descendants().Where(e => string.Equals(e.Name.LocalName, "RouteShortName", StringComparison.OrdinalIgnoreCase)))
+                    if (p.Value.ValueKind != JsonValueKind.String) continue;
+
+                    var name = p.Name;
+                    if (name.Equals("CalculatedDepartureTime", StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals("CalculatedArrivalTime", StringComparison.OrdinalIgnoreCase))
                     {
-                        var rsn = e.Value?.Trim();
-                        if (!string.IsNullOrWhiteSpace(rsn)) _activeRoutes.Add(rsn!);
+                        var s = p.Value.GetString();
+                        if (TryParseTime(s, out var dt)) results.Add(dt);
                     }
                 }
             }
+            return CleanupTimes(results);
         }
-        catch { _activeRoutes.Clear(); }
+
+        // XML string wrapped in { "xml": "<DocumentElement>..." }
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
+        {
+            var xml = xmlNode.GetString();
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                var x = XDocument.Parse(xml);
+
+                // Only pull the calculated times; ignore legacy StartTime
+                var times =
+                    x.Descendants("DeparturesForRoute")
+                     .SelectMany(n => new[]
+                     {
+                         n.Element("CalculatedDepartureTime")?.Value?.Trim(),
+                         n.Element("CalculatedArrivalTime")?.Value?.Trim()
+                     })
+                     .Where(s => !string.IsNullOrWhiteSpace(s));
+
+                foreach (var s in times!)
+                {
+                    if (TryParseTime(s, out var dt)) results.Add(dt);
+                }
+            }
+        }
+
+        return CleanupTimes(results);
     }
 
-    // ========= PARSERS =========
-
-    private static List<RouteDto> ParseRoutes(JsonElement root)
+    // ---------- STATUS (uses next departure at first scheduled stop) ----------
+    private async Task<string> GetStatusAsync(string routeShortName)
     {
-        var list = new List<RouteDto>();
-
-        if (root.ValueKind == JsonValueKind.Array)
+        try
         {
-            foreach (var r in root.EnumerateArray())
+            var stopCode = await GetFirstStopCodeAsync(routeShortName);
+            if (string.IsNullOrWhiteSpace(stopCode))
+                return "On Time";
+
+            using var cts = new CancellationTokenSource(RequestTimeout);
+            var nextRoot = await Http.GetFromJsonAsync<JsonElement>(
+                $"{WorkerBase}?method=GetNextDepartures&routeShortName={Uri.EscapeDataString(routeShortName)}&stopCode={Uri.EscapeDataString(stopCode)}",
+                cts.Token);
+
+            if (TryExtractNextTimes(nextRoot, out var scheduled, out var predicted))
             {
-                var name = TryGet(r, "RouteName") ?? TryGet(r, "routeName") ?? "";
-                var shortName = TryGet(r, "RouteShortName") ?? TryGet(r, "routeShortName") ?? "";
-                var id = string.IsNullOrWhiteSpace(shortName) ? name : shortName;
-                if (!string.IsNullOrWhiteSpace(id))
-                    list.Add(new RouteDto(id, string.IsNullOrWhiteSpace(name) ? id : name, string.IsNullOrWhiteSpace(shortName) ? id : shortName));
+                var minutes = Math.Round((predicted - scheduled).TotalMinutes);
+                if (minutes <= -2) return "Running Early";
+                if (minutes >= 3) return "Running Late";
+                return "On Time";
             }
-            return list;
         }
+        catch { /* ignore */ }
+
+        return "On Time";
+    }
+
+    private async Task<string> GetFirstStopCodeAsync(string routeShortName)
+    {
+        if (_firstStopCodeCache.TryGetValue(routeShortName, out var cached))
+            return cached;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(RequestTimeout);
+            var stopsRoot = await Http.GetFromJsonAsync<JsonElement>(
+                $"{WorkerBase}?method=GetScheduledStopCodes&routeShortName={Uri.EscapeDataString(routeShortName)}",
+                cts.Token);
+
+            var code = ParseFirstStopCode(stopsRoot);
+            if (!string.IsNullOrWhiteSpace(code))
+                _firstStopCodeCache[routeShortName] = code;
+
+            return code;
+        }
+        catch { return ""; }
+    }
+
+    // ---------- UI / HELPERS ----------
+    private async Task OnRouteChanged(RouteRow? value)
+    {
+        _selected = value;
+        _filtered = _selected is null ? new(_rows) : _rows.Where(r => r.Short == _selected.Short).ToList();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static Color StatusChipColor(string s) => s switch
+    {
+        "Running Early" => Color.Info,
+        "Running Late" => Color.Error,
+        "On Time" => Color.Success,
+        _ => Color.Default
+    };
+
+    private static Color StatusColor(string s) => StatusChipColor(s);
+
+    // ---------- Parsers ----------
+    private static List<(string Short, string Name, string RouteColor, string RouteTextColor)> ParseRoutes(JsonElement root)
+    {
+        var list = new List<(string, string, string, string)>();
 
         if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
         {
             var xml = xmlNode.GetString() ?? "";
             if (!string.IsNullOrWhiteSpace(xml))
             {
-                var x = XDocument.Parse(xml);
-                var routeElems = x.Descendants().Where(d =>
-                    d.Elements().Any(c => string.Equals(c.Name.LocalName, "RouteShortName", StringComparison.OrdinalIgnoreCase)) ||
-                    d.Elements().Any(c => string.Equals(c.Name.LocalName, "routeShortName", StringComparison.OrdinalIgnoreCase)));
-
-                foreach (var e in routeElems)
+                var doc = XDocument.Parse(xml);
+                foreach (var e in doc.Descendants("CurrentRoutes"))
                 {
-                    var shortName = e.Elements().FirstOrDefault(c => string.Equals(c.Name.LocalName, "RouteShortName", StringComparison.OrdinalIgnoreCase) || string.Equals(c.Name.LocalName, "routeShortName", StringComparison.OrdinalIgnoreCase))?.Value?.Trim() ?? "";
-                    var name = e.Elements().FirstOrDefault(c => string.Equals(c.Name.LocalName, "RouteName", StringComparison.OrdinalIgnoreCase) || string.Equals(c.Name.LocalName, "routeName", StringComparison.OrdinalIgnoreCase))?.Value?.Trim() ?? "";
-                    var id = string.IsNullOrWhiteSpace(shortName) ? name : shortName;
-                    if (!string.IsNullOrWhiteSpace(id))
-                        list.Add(new RouteDto(id, string.IsNullOrWhiteSpace(name) ? id : name, string.IsNullOrWhiteSpace(shortName) ? id : shortName));
+                    var name = e.Element("RouteName")?.Value?.Trim() ?? "";
+                    var shortName = e.Element("RouteShortName")?.Value?.Trim() ?? "";
+                    var color = e.Element("RouteColor")?.Value?.Trim() ?? "888888";
+                    var text = e.Element("RouteTextColor")?.Value?.Trim() ?? "FFFFFF";
+
+                    if (!string.IsNullOrWhiteSpace(shortName) && !string.IsNullOrWhiteSpace(name))
+                        list.Add((shortName, name, color, text));
                 }
             }
         }
         return list;
     }
 
-    private static List<DateTime> ExtractTimes(JsonElement root, out string firstStopName)
+    private static string ParseFirstStopCode(JsonElement root)
     {
-        firstStopName = "";
-        var times = new List<DateTime>();
-
-        void Add(string? s)
-        {
-            if (TryParseBt4uTime(s, out var dt)) times.Add(dt);
-        }
-
         if (root.ValueKind == JsonValueKind.Array)
         {
             foreach (var row in root.EnumerateArray())
             {
-                foreach (var prop in row.EnumerateObject())
+                foreach (var p in row.EnumerateObject())
                 {
-                    var name = prop.Name;
-                    var isTimeLike =
-                        name.Contains("Depart", StringComparison.OrdinalIgnoreCase) ||
-                        name.EndsWith("Time", StringComparison.OrdinalIgnoreCase);
-
-                    if (isTimeLike && prop.Value.ValueKind == JsonValueKind.String)
-                        Add(prop.Value.GetString());
-
-                    if (string.IsNullOrWhiteSpace(firstStopName) &&
-                        name.Contains("StopName", StringComparison.OrdinalIgnoreCase) &&
-                        prop.Value.ValueKind == JsonValueKind.String)
-                        firstStopName = prop.Value.GetString() ?? "";
+                    if (p.Name.Contains("StopCode", StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.String)
+                        return p.Value.GetString() ?? "";
+                    if (p.Name.Equals("Code", StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.String)
+                        return p.Value.GetString() ?? "";
                 }
             }
         }
         else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
         {
-            var xml = xmlNode.GetString();
+            var xml = xmlNode.GetString() ?? "";
             if (!string.IsNullOrWhiteSpace(xml))
             {
                 var x = XDocument.Parse(xml);
-                foreach (var e in x.Descendants())
+                var code = x.Descendants().FirstOrDefault(e =>
+                    e.Name.LocalName.Equals("StopCode", StringComparison.OrdinalIgnoreCase) ||
+                    e.Name.LocalName.Equals("Code", StringComparison.OrdinalIgnoreCase));
+                if (code is not null) return code.Value?.Trim() ?? "";
+            }
+        }
+        return "";
+    }
+
+    private static bool TryExtractNextTimes(JsonElement root, out DateTime scheduled, out DateTime predicted)
+    {
+        scheduled = default;
+        predicted = default;
+
+        // JSON array
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var row in root.EnumerateArray())
+            {
+                var (sch, est) = ExtractTimesFromObj(row);
+                if (sch != default && est != default) { scheduled = sch; predicted = est; return true; }
+            }
+        }
+        // XML wrapper
+        else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
+        {
+            var xml = xmlNode.GetString() ?? "";
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                var x = XDocument.Parse(xml);
+                foreach (var n in x.Descendants("DeparturesForRoute"))
                 {
-                    var n = e.Name.LocalName;
-                    var isTimeLike =
-                        n.Contains("Depart", StringComparison.OrdinalIgnoreCase) ||
-                        n.EndsWith("Time", StringComparison.OrdinalIgnoreCase);
+                    DateTime sch = default, est = default;
 
-                    if (isTimeLike) Add(e.Value);
+                    var schedStr = n.Element("ScheduledDepartureTime")?.Value?.Trim()
+                                   ?? n.Element("ScheduledArrivalTime")?.Value?.Trim();
+                    var predStr = n.Element("CalculatedDepartureTime")?.Value?.Trim()
+                                   ?? n.Element("CalculatedArrivalTime")?.Value?.Trim();
 
-                    if (string.IsNullOrWhiteSpace(firstStopName) &&
-                        n.Contains("StopName", StringComparison.OrdinalIgnoreCase))
-                        firstStopName = e.Value?.Trim() ?? "";
+                    if (!string.IsNullOrWhiteSpace(schedStr) && TryParseTime(schedStr, out var a)) sch = a;
+                    if (!string.IsNullOrWhiteSpace(predStr) && TryParseTime(predStr, out var b)) est = b;
+
+                    if (sch != default && est != default) { scheduled = sch; predicted = est; return true; }
                 }
             }
         }
+        return false;
 
-        // Remove midnight placeholders when other times exist
-        if (times.Any(t => t.TimeOfDay != TimeSpan.Zero))
-            times = times.Where(t => t.TimeOfDay != TimeSpan.Zero).ToList();
+        static (DateTime sch, DateTime est) ExtractTimesFromObj(JsonElement obj)
+        {
+            DateTime sch = default, est = default;
+            foreach (var p in obj.EnumerateObject())
+            {
+                if (p.Value.ValueKind != JsonValueKind.String) continue;
+                var name = p.Name;
+                var s = p.Value.GetString();
 
-        return times.Distinct().OrderBy(t => t).ToList();
+                if ((name.Contains("Scheduled", StringComparison.OrdinalIgnoreCase) ||
+                     name.Contains("Schedule", StringComparison.OrdinalIgnoreCase)) &&
+                    TryParseTime(s, out var a)) sch = a;
+
+                if ((name.Contains("Calculated", StringComparison.OrdinalIgnoreCase) ||
+                     name.Contains("Pred", StringComparison.OrdinalIgnoreCase) ||
+                     name.Contains("Est", StringComparison.OrdinalIgnoreCase)) &&
+                    TryParseTime(s, out var b)) est = b;
+            }
+            return (sch, est);
+        }
     }
 
-    private static bool TryParseBt4uTime(string? s, out DateTime dt)
+    private static bool TryParseTime(string? s, out DateTime dt) => TryParseDate(s, out dt);
+
+    // STRICT: API returns ISO 8601 with offset, e.g. 2025-10-20T21:47:02-04:00
+    private static bool TryParseDate(string? s, out DateTime dt)
     {
         dt = default;
         if (string.IsNullOrWhiteSpace(s)) return false;
-        s = s.Trim();
 
-        if (DateTime.TryParse(s, out dt)) return true; // full or time-only in current culture
-
-        if (TimeSpan.TryParse(s, out var ts))
+        if (DateTimeOffset.TryParseExact(
+                s.Trim(),
+                "yyyy-MM-dd'T'HH:mm:sszzz",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var dto))
         {
-            dt = DateTime.Today.Add(ts);
+            dt = dto.LocalDateTime; // convert to local for display (DST-safe)
             return true;
         }
 
-        string[] fmts = {
-            "H:mm","HH:mm","h:mm tt","hh:mm tt",
-            "M/d/yyyy h:mm tt","M/d/yyyy H:mm","yyyy-MM-dd HH:mm","yyyy-MM-ddTHH:mm:ss"
-    };
-        return DateTime.TryParseExact(
-            s, fmts,
-            System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.None,
-            out dt);
+        return false;
     }
 
-    private static string? TryGet(JsonElement obj, string name)
-        => obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
-            ? v.GetString()
-            : null;
+    private static List<DateTime> CleanupTimes(List<DateTime> times)
+    {
+        // Drop “midnight placeholders” if real times exist
+        if (times.Any(t => t.TimeOfDay != TimeSpan.Zero))
+            times = times.Where(t => t.TimeOfDay != TimeSpan.Zero).ToList();
+
+        // Drop obvious legacy/sentinel years if they sneak in
+        times = times.Where(t => t.Year >= 2000).ToList();
+
+        return times.Distinct().OrderBy(t => t).ToList();
+    }
 }
