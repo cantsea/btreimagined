@@ -9,76 +9,83 @@
 
 @if (_loading)
 {
-    <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-16 mb-10">
-        <MudStack AlignItems="AlignItems.Center" JustifyContent="Justify.Center" Style="min-height:40vh;">
-            <MudProgressCircular Size="Size.Large" Indeterminate="true" />
+    <MudContainer>
+        <MudStack AlignItems="AlignItems.Center" JustifyContent="Justify.Center">
+            <MudProgressCircular Size="Size.Medium" Indeterminate="true" />
         </MudStack>
     </MudContainer>
 }
 else
 {
-    <MudPaper Elevation="5" Outlined="true" Class="pa-3">
-        <!-- Fixed logical width so mobile scrolls horizontally instead of squishing -->
-        <MudGrid Spacing="2" Class="items-center" Style="min-width: 960px;">
-            <!-- Header (Route header contains a dropdown selector) -->
-            <MudItem xs="5">
-                <MudSelect T="string"
-                           Label="Route"
-                           Dense="true"
-                           Value="@_selectedShort"
-                           ValueChanged="@OnRouteChanged"
-                           Class="w-full">
-                    <MudSelectItem Value="@AllRoutesValue">All Routes</MudSelectItem>
-                    @foreach (var r in _rows)
-                    {
-                        <MudSelectItem Value="@r.Short">@r.Name (@r.Short)</MudSelectItem>
-                    }
-                </MudSelect>
-            </MudItem>
+    <MudCard Outlined="true">
+        <MudDataGrid Elevation="10" T="RouteRow"
+                     Items="_rows"
+                     Dense="true"
+                     Bordered="true"
+                     Striped="true"
+                     Hover="true"
+                     ReadOnly="true">
 
-            <MudItem xs="2"><MudText Typo="Typo.subtitle1" Class="fw-bold">Shorthand</MudText></MudItem>
-            <MudItem xs="3"><MudText Typo="Typo.subtitle1" Class="fw-bold">Hours of Operation</MudText></MudItem>
-            <MudItem xs="2"><MudText Typo="Typo.subtitle1" Class="fw-bold">Status</MudText></MudItem>
+            <Columns>
+                <!-- Route (colored text) -->
+                <PropertyColumn T="RouteRow" TProperty="string"
+                                Title="Route"
+                                Property="@(r => r.Name)"
+                                SortBy="@(r => r.Name)" Filterable="true">
+                    <CellTemplate>
+                        <MudText Typo="Typo.body1"
+                                 Style="@($"color: #{context.Item.RouteColor}; font-weight:600;")">
+                            @context.Item.Name
+                        </MudText>
+                    </CellTemplate>
+                </PropertyColumn>
 
-            <MudItem xs="12"><MudDivider Class="my-2" /></MudItem>
+                <!-- Shorthand (chip) -->
+                <PropertyColumn T="RouteRow" TProperty="string"
+                                Title="Shorthand"
+                                Property="@(r => r.Short)"
+                                SortBy="@(r => r.Short)">
+                    <CellTemplate>
+                        <MudChip Variant="Variant.Outlined"
+                                 Style="@($"background-color: #{context.Item.RouteColor}; color: #{context.Item.RouteTextColor}; font-weight:600;")">
+                            @context.Item.Short
+                        </MudChip>
+                    </CellTemplate>
+                </PropertyColumn>
 
-            <!-- Rows -->
-            @for (var i = 0; i < _filtered.Count; i++)
-            {
-                var r = _filtered[i];
-                var bg = i % 2 == 0 ? "#ffffff" : "#f7f7fb";
+                <!-- Hours of Operation -->
+                <PropertyColumn T="RouteRow" TProperty="string"
+                                Title="Hours of Operation"
+                                Property="@(r => r.HoursOfOperation)"
+                                SortBy="@(r => r.HoursOfOperation)" Filterable="true">
+                    <CellTemplate>
+                        <MudText Typo="Typo.body1" Color="Color.Secondary">
+                            @context.Item.HoursOfOperation
+                        </MudText>
+                    </CellTemplate>
+                </PropertyColumn>
 
-                <MudItem xs="12" Style="@($"background:{bg};")">
-                    <MudGrid Spacing="2" Class="items-center">
-                        <MudItem xs="5">
-                            <MudText Typo="Typo.body1" Style="@($"color: #{r.RouteColor}; font-weight:600;")">
-                                @r.Name
-                            </MudText>
-                        </MudItem>
+                <!-- Status (colored chip) -->
+                <PropertyColumn T="RouteRow" TProperty="string"
+                                Title="Status"
+                                Property="@(r => r.Status)"
+                                SortBy="@(r => r.Status)">
+                    <CellTemplate>
+                        <MudChip Size="Size.Small"
+                                 Variant="Variant.Filled"
+                                 Color="@StatusColor(context.Item.Status)">
+                            @context.Item.Status
+                        </MudChip>
+                    </CellTemplate>
+                </PropertyColumn>
+            </Columns>
 
-                        <MudItem xs="2">
-                            <MudChip T="string" Variant="Variant.Outlined"
-                                     Style="@($"background-color: #{r.RouteColor}; color: #{r.RouteTextColor}; font-weight:600;")">
-                                @r.Short
-                            </MudChip>
-                        </MudItem>
+            <PagerContent>
+                <MudDataGridPager PageSizeOptions="new int[] { 25, 50, 100 }" />
+            </PagerContent>
+        </MudDataGrid>
+    </MudCard>
 
-                        <MudItem xs="3">
-                            <MudText Typo="Typo.body1" Color="Color.Secondary">
-                                @r.HoursOfOperation
-                            </MudText>
-                        </MudItem>
-
-                        <MudItem xs="2">
-                            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="@StatusColor(r.Status)">
-                                @r.Status
-                            </MudChip>
-                        </MudItem>
-                    </MudGrid>
-                </MudItem>
-            }
-        </MudGrid>
-    </MudPaper>
 }
 
 @code {
@@ -89,9 +96,6 @@ else
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
     private static readonly string ServiceDateIso = DateTime.Today.ToString("yyyy-MM-dd");
 
-    // Sentinel for "All Routes"
-    private const string AllRoutesValue = "__ALL__";
-
     // ---------- MODEL ----------
     private sealed record RouteRow(
         string Short, string Name, string RouteColor, string RouteTextColor,
@@ -100,10 +104,7 @@ else
 
     // ---------- STATE ----------
     private readonly List<RouteRow> _rows = new();
-    private List<RouteRow> _filtered = new();
-    private string _selectedShort = AllRoutesValue; // default to All Routes
     private bool _loading = true;
-
     private readonly Dictionary<string, string> _firstStopCodeCache = new(StringComparer.OrdinalIgnoreCase);
 
     // ---------- LIFECYCLE ----------
@@ -112,7 +113,6 @@ else
         try
         {
             await LoadRoutesAndStatsAsync();
-            _filtered = new(_rows);
         }
         finally
         {
@@ -161,16 +161,6 @@ else
             _rows.Sort((a, b) => string.Compare(a.Short, b.Short, StringComparison.OrdinalIgnoreCase));
         }
         catch { _rows.Clear(); }
-    }
-
-    // ---------- FILTER ----------
-    private async Task OnRouteChanged(string? shortName)
-    {
-        _selectedShort = string.IsNullOrWhiteSpace(shortName) ? AllRoutesValue : shortName;
-        _filtered = _selectedShort == AllRoutesValue
-            ? new(_rows)
-            : _rows.Where(r => r.Short.Equals(_selectedShort, StringComparison.OrdinalIgnoreCase)).ToList();
-        await InvokeAsync(StateHasChanged);
     }
 
     // ---------- HOURS ----------
@@ -405,7 +395,6 @@ else
 
     private static bool TryParseTime(string? s, out DateTime dt) => TryParseDate(s, out dt);
 
-    // STRICT ISO 8601 with offset (e.g., 2025-10-20T21:47:02-04:00)
     private static bool TryParseDate(string? s, out DateTime dt)
     {
         dt = default;
