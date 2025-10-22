@@ -65,7 +65,7 @@ else
                     </CellTemplate>
                 </PropertyColumn>
 
-                <!-- Status (colored chip) -->
+                <!-- Status (colored chip with minutes when Early/Late) -->
                 <PropertyColumn T="RouteRow" TProperty="string"
                                 Title="Status"
                                 Property="@(r => r.Status)"
@@ -224,9 +224,15 @@ else
         return CleanupTimes(results);
     }
 
-    // ---------- STATUS ----------
+    // ---------- STATUS (Vehicle-first median delay, then fallback) ----------
     private async Task<string> GetStatusAsync(string routeShortName)
     {
+        // 1) Best: vehicle-level adherence based on TripID+StopCode (from GetCurrentBusInfo)
+        var fromVehicles = await TryGetStatusFromVehiclesAsync(routeShortName);
+        if (!string.IsNullOrWhiteSpace(fromVehicles))
+            return fromVehicles!;
+
+        // 2) Fallback: anchor stop via GetNextDepartures (median over next few)
         try
         {
             var stopCode = await GetFirstStopCodeAsync(routeShortName);
@@ -237,18 +243,21 @@ else
                 $"{WorkerBase}?method=GetNextDepartures&routeShortName={Uri.EscapeDataString(routeShortName)}&stopCode={Uri.EscapeDataString(stopCode)}",
                 cts.Token);
 
-            if (TryExtractNextTimes(nextRoot, out var scheduled, out var predicted))
+            var pairs = ExtractNextPairs(nextRoot);
+            var delays = pairs.OrderBy(p => p.predicted).Take(3)
+                              .Select(p => Math.Round((p.predicted - p.scheduled).TotalMinutes))
+                              .ToList();
+
+            if (delays.Count > 0)
             {
-                var minutes = Math.Round((predicted - scheduled).TotalMinutes);
-                if (minutes <= -2) return "Running Early";
-                if (minutes >= 3) return "Running Late";
-                return "On Time";
+                var med = Median(delays);
+                return StatusLabelFromDelay(med);
             }
         }
-        catch { }
+        catch { /* ignore */ }
+
         return "On Time";
     }
-
     private async Task<string> GetFirstStopCodeAsync(string routeShortName)
     {
         if (_firstStopCodeCache.TryGetValue(routeShortName, out var cached))
@@ -267,15 +276,105 @@ else
 
             return code;
         }
-        catch { return ""; }
+        catch
+        {
+            return "";
+        }
+    }
+
+    // Vehicle-first: compute median delay across active vehicles on this route
+    private async Task<string?> TryGetStatusFromVehiclesAsync(string routeShortName)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(RequestTimeout);
+            var root = await Http.GetFromJsonAsync<JsonElement>(
+                $"{WorkerBase}?method=GetCurrentBusInfo", cts.Token);
+
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("xml", out var xmlNode))
+                return null;
+
+            var xml = xmlNode.GetString() ?? "";
+            if (string.IsNullOrWhiteSpace(xml)) return null;
+
+            var x = XDocument.Parse(xml);
+
+            var vehicles = x.Descendants("LatestInfoTable")
+                            .Where(n => string.Equals(n.Element("RouteShortName")?.Value?.Trim(), routeShortName, StringComparison.OrdinalIgnoreCase))
+                            .Select(n => new
+                            {
+                                TripID = n.Element("TripID")?.Value?.Trim(),
+                                StopCode = n.Element("StopCode")?.Value?.Trim()
+                            })
+                            .Where(v => !string.IsNullOrWhiteSpace(v.TripID) && !string.IsNullOrWhiteSpace(v.StopCode))
+                            .ToList();
+
+            if (vehicles.Count == 0) return null;
+
+            var delays = new List<double>();
+            using var sem = new SemaphoreSlim(MaxParallel);
+            var tasks = vehicles.Select(async v =>
+            {
+                await sem.WaitAsync();
+                try
+                {
+                    var d = await GetVehicleDelayMinutesAsync(v.TripID!, v.StopCode!);
+                    if (d is double m) lock (delays) delays.Add(m);
+                }
+                finally { sem.Release(); }
+            }).ToArray();
+
+            await Task.WhenAll(tasks);
+            if (delays.Count == 0) return null;
+
+            var med = Median(delays);
+            return StatusLabelFromDelay(med);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // For a specific vehicle, compare Calculated vs Scheduled at its current (or next) stop
+    private async Task<double?> GetVehicleDelayMinutesAsync(string tripId, string stopCode)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(RequestTimeout);
+            var tripRoot = await Http.GetFromJsonAsync<JsonElement>(
+                $"{WorkerBase}?method=GetArrivalAndDepartureTimesForTrip&tripID={Uri.EscapeDataString(tripId)}",
+                cts.Token);
+
+            var rows = ExtractTripStopTimes(tripRoot);
+            if (rows.Count == 0) return null;
+
+            (string stop, DateTime sch, DateTime calc)? best =
+                rows.FirstOrDefault(r => string.Equals(r.stopCode, stopCode, StringComparison.OrdinalIgnoreCase));
+
+            if (best is null)
+            {
+                var now = DateTime.Now;
+                best = rows.Where(r => r.calc > now.AddSeconds(-90))
+                           .OrderBy(r => r.calc)
+                           .Cast<(string stop, DateTime sch, DateTime calc)?>()
+                           .FirstOrDefault();
+            }
+
+            if (best is null) return null;
+            var b = best.Value;
+            return Math.Round((b.calc - b.sch).TotalMinutes);
+        }
+        catch { return null; }
     }
 
     // ---------- PARSERS ----------
+    // Color now keys off the prefix, since we include (+Xm) in the label
     private static Color StatusColor(string s) => s switch
     {
-        "Running Early" => Color.Info,
-        "Running Late" => Color.Error,
-        "On Time" => Color.Success,
+        _ when s.StartsWith("Running Early", StringComparison.OrdinalIgnoreCase) => Color.Info,
+        _ when s.StartsWith("Running Late", StringComparison.OrdinalIgnoreCase) => Color.Error,
+        _ when s.StartsWith("On Time", StringComparison.OrdinalIgnoreCase) => Color.Success,
         _ => Color.Default
     };
 
@@ -334,8 +433,113 @@ else
         return "";
     }
 
+    // Extract multiple (scheduled, predicted) pairs from NextDepartures to compute median
+    private static List<(DateTime scheduled, DateTime predicted)> ExtractNextPairs(JsonElement root)
+    {
+        var pairs = new List<(DateTime, DateTime)>();
+
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var row in root.EnumerateArray())
+            {
+                DateTime sch = default, est = default;
+                foreach (var p in row.EnumerateObject())
+                {
+                    if (p.Value.ValueKind != JsonValueKind.String) continue;
+                    var name = p.Name;
+                    var s = p.Value.GetString();
+
+                    if ((name.Contains("Scheduled", StringComparison.OrdinalIgnoreCase) ||
+                         name.Contains("Schedule", StringComparison.OrdinalIgnoreCase)) &&
+                        TryParseTime(s, out var a)) sch = a;
+
+                    if ((name.Contains("Calculated", StringComparison.OrdinalIgnoreCase) ||
+                         name.Contains("Pred", StringComparison.OrdinalIgnoreCase) ||
+                         name.Contains("Est", StringComparison.OrdinalIgnoreCase)) &&
+                        TryParseTime(s, out var b)) est = b;
+                }
+                if (sch != default && est != default) pairs.Add((sch, est));
+            }
+            return pairs;
+        }
+
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
+        {
+            var xml = xmlNode.GetString() ?? "";
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                var x = XDocument.Parse(xml);
+                foreach (var n in x.Descendants("DeparturesForRoute"))
+                {
+                    var schedStr = n.Element("ScheduledDepartureTime")?.Value?.Trim()
+                                   ?? n.Element("ScheduledArrivalTime")?.Value?.Trim();
+                    var predStr = n.Element("CalculatedDepartureTime")?.Value?.Trim()
+                                   ?? n.Element("CalculatedArrivalTime")?.Value?.Trim();
+
+                    if (!string.IsNullOrWhiteSpace(schedStr) && !string.IsNullOrWhiteSpace(predStr) &&
+                        TryParseTime(schedStr, out var sch) && TryParseTime(predStr, out var est))
+                    {
+                        pairs.Add((sch, est));
+                    }
+                }
+            }
+        }
+        return pairs;
+    }
+
+    // Parse (stopCode, scheduled, calculated) rows from a Trip response
+    private static List<(string stopCode, DateTime sch, DateTime calc)> ExtractTripStopTimes(JsonElement root)
+    {
+        var list = new List<(string, DateTime, DateTime)>();
+
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
+        {
+            var xml = xmlNode.GetString() ?? "";
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                var x = XDocument.Parse(xml);
+                foreach (var n in x.Descendants())
+                {
+                    var stop = n.Element("StopCode")?.Value?.Trim()
+                             ?? n.Element("Code")?.Value?.Trim();
+                    if (string.IsNullOrWhiteSpace(stop)) continue;
+
+                    var schedStr = n.Element("ScheduledDepartureTime")?.Value?.Trim()
+                                ?? n.Element("ScheduledArrivalTime")?.Value?.Trim();
+                    var calcStr = n.Element("CalculatedDepartureTime")?.Value?.Trim()
+                                ?? n.Element("CalculatedArrivalTime")?.Value?.Trim();
+
+                    if (!string.IsNullOrWhiteSpace(schedStr) && !string.IsNullOrWhiteSpace(calcStr) &&
+                        TryParseTime(schedStr, out var sch) && TryParseTime(calcStr, out var calc))
+                    {
+                        list.Add((stop, sch, calc));
+                    }
+                }
+            }
+        }
+        return list;
+    }
+
+    // ---------- SMALL UTILS ----------
+    private static string StatusLabelFromDelay(double minutes)
+    {
+        // minutes is already rounded
+        if (minutes <= -2) return $"Running Early ({minutes:+#;-#;0}m)";
+        if (minutes >= 3) return $"Running Late ({minutes:+#;-#;0}m)";
+        return "On Time";
+    }
+
+    private static double Median(IReadOnlyList<double> xs)
+    {
+        if (xs is null || xs.Count == 0) return 0;
+        var a = xs.OrderBy(v => v).ToArray();
+        int n = a.Length;
+        return (n % 2 == 1) ? a[n / 2] : 0.5 * (a[n / 2 - 1] + a[n / 2]);
+    }
+
     private static bool TryExtractNextTimes(JsonElement root, out DateTime scheduled, out DateTime predicted)
     {
+        // (kept for compatibility; used nowhere now, but safe to leave)
         scheduled = default;
         predicted = default;
 
