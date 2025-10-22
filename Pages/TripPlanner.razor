@@ -3,6 +3,7 @@
 @using System.Net.Http.Json
 @using System.Text.Json
 @using System.Xml.Linq
+@using Microsoft.JSInterop
 @inject HttpClient Http
 @inject IJSRuntime JS
 
@@ -11,7 +12,7 @@
 <MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6">
     <MudPaper Class="pa-4">
         <MudStack Spacing="2">
-            <MudText Typo="Typo.h5">Find stops near you</MudText>
+            <MudText Typo="Typo.h5">Plan a trip</MudText>
 
             <MudStack Direction="Row" Spacing="2" AlignItems="AlignItems.Center">
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="UseMyLocation" Disabled="@_busy">
@@ -20,39 +21,52 @@
                 <MudText Color="Color.Secondary">@_status</MudText>
             </MudStack>
 
-            <MudDivider Class="my-2" />
+            <MudStack Spacing="2" Class="mt-2">
+                <MudAutocomplete T="StopOption"
+                                 Label="Origin stop"
+                                 Value="_origin"
+                                 ValueChanged="OnOriginChanged"
+                                 ToStringFunc="@(s => s is null ? string.Empty : $"{s.Name} ({s.Code})")"
+                                 SearchFunc="@(SearchStops)"
+                                 Clearable="true"
+                                 Adornment="Adornment.Start"
+                                 AdornmentIcon="@Icons.Material.Filled.RadioButtonChecked"
+                                 Dense="true" />
 
-            <MudStack Direction="Row" Spacing="2" AlignItems="AlignItems.End">
-                <MudTextField @bind-Value="_lat" Label="Latitude" Variant="Variant.Filled" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Place" Style="max-width:260px" />
-                <MudTextField @bind-Value="_lon" Label="Longitude" Variant="Variant.Filled" Style="max-width:260px" />
-                <MudNumericField @bind-Value="_noOfStops" Min="1" Max="20" Label="# Stops" Variant="Variant.Filled" Style="max-width:160px" />
-                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="SearchManual" Disabled="@_busy">Search</MudButton>
+
+                @if (_originRoutesLoading)
+                {
+                    <MudStack Class="mt-2" AlignItems="AlignItems.Start">
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                        <MudText Color="Color.Secondary">Loading routes that pick up at @_origin?.Code…</MudText>
+                    </MudStack>
+                }
+                else if (_originRoutes.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-2">Routes picking up at @_origin?.Code</MudText>
+                    <MudDataGrid T="OriginRouteRow" Items="_originRoutes" Dense="true" Hover="true" Bordered="true" Striped="true">
+                        <Columns>
+                            <PropertyColumn T="OriginRouteRow" TProperty="string" Title="Route" Property="@(r => r.Route)" />
+                            <PropertyColumn T="OriginRouteRow" TProperty="string" Title="Next pickup" Property="@(r => r.NextDisplay)" />
+                        </Columns>
+                        <PagerContent>
+                            <MudDataGridPager PageSizeOptions="new int[] { 5, 10 }" />
+                        </PagerContent>
+                    </MudDataGrid>
+                }
+                else if (_origin is not null)
+                {
+                    <MudAlert Severity="Severity.Info" Class="mt-2">
+                        No upcoming pickups found at <b>@_origin.Code</b> right now.
+                    </MudAlert>
+                }
             </MudStack>
 
             @if (_loading)
             {
-                <MudStack AlignItems="AlignItems.Center" JustifyContent="Center" Style="min-height: 20vh;">
+                <MudStack AlignItems="AlignItems.Center" JustifyContent="Justify.Center" Style="min-height:12vh;">
                     <MudProgressCircular Indeterminate="true" />
                 </MudStack>
-            }
-            else if (_stops.Count > 0)
-            {
-                <MudDataGrid T="StopRow"
-                             Items="_stops"
-                             Dense="true" Bordered="true" Striped="true" Hover="true" ReadOnly="true">
-                    <Columns>
-                        <PropertyColumn T="StopRow" TProperty="string" Title="Stop" Property="@(s => s.Name)" />
-                        <PropertyColumn T="StopRow" TProperty="string" Title="Code" Property="@(s => s.Code)" />
-                        <PropertyColumn T="StopRow" TProperty="double" Title="Distance (m)" Property="@(s => s.DistanceMeters)" />
-                    </Columns>
-                    <PagerContent>
-                        <MudDataGridPager PageSizeOptions="new int[] { 5, 10 }" />
-                    </PagerContent>
-                </MudDataGrid>
-            }
-            else if (!_loading && _searched)
-            {
-                <MudAlert Severity="Severity.Info">No nearby stops found.</MudAlert>
             }
         </MudStack>
     </MudPaper>
@@ -61,100 +75,164 @@
 @code {
     // ---------- CONFIG ----------
     private const string WorkerBase = "https://blue-disk-457f.fionncmurphy.workers.dev/api/bt4u";
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(12);
+    private static readonly string ServiceDateIso = DateTime.Today.ToString("yyyy-MM-dd");
 
-    // ---------- MODEL ----------
-    private sealed record StopRow(string Code, string Name, double DistanceMeters);
+    // ---------- MODELS ----------
+    private sealed record StopOption(string Code, string Name, double DistanceMeters);
+
+    private sealed record OriginRouteRow(string Route, DateTime? Next)
+    {
+        public string NextDisplay => Next.HasValue ? Next.Value.ToString("h:mm tt") : "—";
+    }
 
     // ---------- STATE ----------
-    private bool _busy;
-    private bool _loading;
-    private bool _searched;
+    private bool _busy, _loading;
     private string _status = "";
-    private string _lat = "";
-    private string _lon = "";
-    private int _noOfStops = 10;
-    private readonly List<StopRow> _stops = new();
+    private readonly List<StopOption> _knownStops = new();
+    private StopOption? _origin;
 
-    // ---------- UI ACTIONS ----------
+    private readonly List<OriginRouteRow> _originRoutes = new();
+    private bool _originRoutesLoading;
+
+    // ---------- GEO ----------
     private async Task UseMyLocation()
     {
         _busy = true; _status = "Requesting permission…"; StateHasChanged();
         try
         {
-            // load JS module once per page
             var mod = await JS.InvokeAsync<IJSObjectReference>("import", "./js/geo.js");
-            var perm = await mod.InvokeAsync<string>("permissionStatus");
-            if (perm == "denied") { _status = "Location permission denied."; _busy = false; return; }
-
             var pos = await mod.InvokeAsync<GeoPosition>("getPosition", new { enableHighAccuracy = true, timeout = 10000, maximumAge = 0 });
-            _lat = pos.lat.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            _lon = pos.lon.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            _status = $"Got location (±{pos.accuracy?.ToString("0")} m). Searching…";
-
-            await QueryNearestStops(pos.lat, pos.lon, _noOfStops);
+            _status = $"Location ok (±{pos.accuracy?.ToString("0")} m). Finding nearby stops…";
+            await LoadNearestStops(pos.lat, pos.lon, 12);
+            if (_knownStops.Count > 0)
+            {
+                _origin = _knownStops[0];
+                await RefreshOriginRoutesAsync();
+            }
         }
-        catch (JSException jse)
-        {
-            _status = $"Location error: {jse.Message}";
-        }
-        catch (Exception ex)
-        {
-            _status = $"Location error.";
-            Console.Error.WriteLine(ex);
-        }
+        catch (Exception ex) { _status = "Location failed."; Console.Error.WriteLine(ex); }
         finally { _busy = false; StateHasChanged(); }
     }
 
-    private async Task SearchManual()
+    private async Task LoadNearestStops(double lat, double lon, int noOfStops)
     {
-        if (!double.TryParse(_lat, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var lat) ||
-            !double.TryParse(_lon, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var lon))
-        {
-            _status = "Enter valid latitude/longitude."; return;
-        }
-        await QueryNearestStops(lat, lon, _noOfStops);
-    }
-
-    // ---------- DATA ----------
-    private async Task QueryNearestStops(double lat, double lon, int noOfStops)
-    {
-        _loading = true; _searched = true; _stops.Clear(); StateHasChanged();
+        _loading = true; StateHasChanged();
         try
         {
             using var cts = new CancellationTokenSource(RequestTimeout);
-
             var url = $"{WorkerBase}?method=GetNearestStops" +
                       $"&latitude={lat.ToString(System.Globalization.CultureInfo.InvariantCulture)}" +
                       $"&longitude={lon.ToString(System.Globalization.CultureInfo.InvariantCulture)}" +
                       $"&noOfStops={noOfStops}" +
-                      $"&serviceDate={DateTime.Today:yyyy-MM-dd}";
-
+                      $"&serviceDate={ServiceDateIso}";
             var root = await Http.GetFromJsonAsync<JsonElement>(url, cts.Token);
             var rows = ParseNearestStops(root);
-            _stops.AddRange(rows.OrderBy(s => s.DistanceMeters));
-            _status = $"Found {_stops.Count} stop(s).";
+            _knownStops.Clear();
+            _knownStops.AddRange(rows.OrderBy(s => s.DistanceMeters));
+            _status = $"Found {_knownStops.Count} nearby stops.";
         }
-        catch
-        {
-            _status = "Failed to fetch nearest stops.";
-        }
-        finally { _loading = false; StateHasChanged(); }
+        catch { _status = "Failed to fetch nearest stops."; }
+        finally { _loading = false; }
     }
 
-    // ---------- PARSER ----------
-    private static List<StopRow> ParseNearestStops(JsonElement root)
+    // ---------- ORIGIN CHANGE ----------
+    private async Task OnOriginChanged(StopOption? s)
     {
-        var list = new List<StopRow>();
+        _origin = s;
+        await RefreshOriginRoutesAsync();
+    }
 
-        // JSON array form
+
+    private async Task RefreshOriginRoutesAsync()
+    {
+        _originRoutes.Clear();
+        if (_origin is null) { StateHasChanged(); return; }
+
+        _originRoutesLoading = true; StateHasChanged();
+
+        try
+        {
+            using var cts = new CancellationTokenSource(RequestTimeout);
+
+            // 1) All routes that serve the origin today
+            var routesAtOrigin = await GetRoutesServingStop(_origin.Code, cts.Token);
+
+            // 2) For each route, fetch the very next pickup at the origin
+            var tasks = routesAtOrigin.Select(async r =>
+            {
+                try
+                {
+                    var times = await GetNextDeparturesForStop(r, _origin.Code, 1, cts.Token);
+                    var next = times.FirstOrDefault();
+                    if (next != default && next >= DateTime.Now)
+                    {
+                        lock (_originRoutes)
+                            _originRoutes.Add(new OriginRouteRow(r, next));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"GetNextDeparturesForStop failed for route {r} at origin {_origin.Code}: {ex.Message}");
+                }
+            });
+
+            await Task.WhenAll(tasks);
+
+            _originRoutes.Sort((a, b) =>
+            {
+                var t = Nullable.Compare(a.Next, b.Next);
+                return t != 0 ? t : string.Compare(a.Route, b.Route, StringComparison.OrdinalIgnoreCase);
+            });
+        }
+        finally
+        {
+            _originRoutesLoading = false; StateHasChanged();
+        }
+    }
+
+    // ---------- SEARCH ----------
+    private Task<IEnumerable<StopOption>> SearchStops(string value, CancellationToken _)
+    {
+        IEnumerable<StopOption> result =
+            string.IsNullOrWhiteSpace(value)
+            ? _knownStops
+            : _knownStops.Where(s =>
+                (s.Name?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (s.Code?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false));
+
+        return Task.FromResult(result);
+    }
+
+    // ---------- CALLS ----------
+    private async Task<List<string>> GetRoutesServingStop(string stopCode, CancellationToken token)
+    {
+        var url = $"{WorkerBase}?method=GetScheduledRoutes&stopCode={Uri.EscapeDataString(stopCode)}&serviceDate={ServiceDateIso}";
+        var root = await Http.GetFromJsonAsync<JsonElement>(url, token);
+        return ParseScheduledRoutes(root);
+    }
+
+    private async Task<List<DateTime>> GetNextDeparturesForStop(string routeShortName, string stopCode, int noOfTrips, CancellationToken token)
+    {
+        var url = $"{WorkerBase}?method=GetNextDeparturesForStop" +
+                  $"&routeShortName={Uri.EscapeDataString(routeShortName)}" +
+                  $"&noOfTrips={noOfTrips}" +
+                  $"&stopCode={Uri.EscapeDataString(stopCode)}";
+
+        var root = await Http.GetFromJsonAsync<JsonElement>(url, token);
+        return ParseNextDeparturesTimes(root);
+    }
+
+    // ---------- PARSERS ----------
+    private static List<StopOption> ParseNearestStops(JsonElement root)
+    {
+        var list = new List<StopOption>();
         if (root.ValueKind == JsonValueKind.Array)
         {
             foreach (var row in root.EnumerateArray())
             {
                 string code = "", name = "";
-                double dist = double.NaN;
-
+                double dist = double.PositiveInfinity;
                 foreach (var p in row.EnumerateObject())
                 {
                     if (p.Value.ValueKind == JsonValueKind.String)
@@ -164,19 +242,17 @@
                         else if (p.Name.Contains("Name", StringComparison.OrdinalIgnoreCase))
                             name = p.Value.GetString() ?? "";
                     }
-                    else if (p.Value.ValueKind == JsonValueKind.Number)
+                    else if (p.Value.ValueKind == JsonValueKind.Number && p.Name.Contains("Distance", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (p.Name.Contains("Distance", StringComparison.OrdinalIgnoreCase) &&
-                            p.Value.TryGetDouble(out var d)) dist = d;
+                        if (p.Value.TryGetDouble(out var d)) dist = d;
                     }
                 }
                 if (!string.IsNullOrWhiteSpace(code) || !string.IsNullOrWhiteSpace(name))
-                    list.Add(new StopRow(code, name, double.IsNaN(dist) ? double.PositiveInfinity : dist));
+                    list.Add(new StopOption(code, name, dist));
             }
             return list;
         }
 
-        // XML wrapper form
         if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
         {
             var xml = xmlNode.GetString() ?? "";
@@ -188,21 +264,121 @@
                     var code = n.Element("StopCode")?.Value?.Trim() ?? n.Element("Code")?.Value?.Trim();
                     var name = n.Element("StopName")?.Value?.Trim()
                              ?? n.Element("Name")?.Value?.Trim()
-                             ?? n.Element("Description")?.Value?.Trim()
-                             ?? "";
+                             ?? n.Element("Description")?.Value?.Trim() ?? "";
                     double dist = double.PositiveInfinity;
                     var dstr = n.Element("Distance")?.Value?.Trim() ?? n.Element("DistanceMeters")?.Value?.Trim();
                     if (!string.IsNullOrWhiteSpace(dstr)) _ = double.TryParse(dstr, out dist);
 
                     if (!string.IsNullOrWhiteSpace(code) || !string.IsNullOrWhiteSpace(name))
-                        list.Add(new StopRow(code ?? "", name, dist));
+                        list.Add(new StopOption(code ?? "", name, dist));
+                }
+            }
+        }
+        return list;
+    }
+
+    private static List<string> ParseScheduledRoutes(JsonElement root)
+    {
+        var routes = new List<string>();
+
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
+        {
+            var xml = xmlNode.GetString() ?? "";
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                var x = XDocument.Parse(xml);
+                routes.AddRange(x.Descendants("ScheduledRoutes")
+                                 .Select(e => e.Element("RouteShortName")?.Value?.Trim())
+                                 .Where(s => !string.IsNullOrWhiteSpace(s))!);
+            }
+            return routes.Distinct(StringComparer.OrdinalIgnoreCase)
+                         .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+                         .ToList();
+        }
+
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var row in root.EnumerateArray())
+            {
+                foreach (var p in row.EnumerateObject())
+                {
+                    if (p.Name.Equals("RouteShortName", StringComparison.OrdinalIgnoreCase)
+                        && p.Value.ValueKind == JsonValueKind.String)
+                    {
+                        var s = p.Value.GetString();
+                        if (!string.IsNullOrWhiteSpace(s)) routes.Add(s.Trim());
+                    }
                 }
             }
         }
 
-        return list;
+        return routes.Distinct(StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+                     .ToList();
     }
 
-    // ---------- interop DTO ----------
+    private static List<DateTime> ParseNextDeparturesTimes(JsonElement root)
+    {
+        var times = new List<DateTime>();
+
+        // JSON-wrapped XML
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
+        {
+            var xml = xmlNode.GetString() ?? "";
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                var x = XDocument.Parse(xml);
+                foreach (var n in x.Descendants("NextDepartures"))
+                {
+                    if (TryParseTime(n.Element("AdjustedDepartureTime")?.Value?.Trim(), out var t))
+                        times.Add(t);
+                    else if (TryParseTime(n.Element("ScheduledDepartureTime")?.Value?.Trim(), out var t2))
+                        times.Add(t2);
+                }
+            }
+            return times.OrderBy(t => t).ToList();
+        }
+
+        // Plain JSON array fallback
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var row in root.EnumerateArray())
+            {
+                foreach (var p in row.EnumerateObject())
+                {
+                    if (p.Value.ValueKind == JsonValueKind.String &&
+                        (p.Name.Contains("AdjustedDepartureTime", StringComparison.OrdinalIgnoreCase) ||
+                         p.Name.Contains("ScheduledDepartureTime", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var s = p.Value.GetString();
+                        if (TryParseTime(s, out var t)) times.Add(t);
+                    }
+                }
+            }
+        }
+
+        return times.OrderBy(t => t).ToList();
+    }
+
+    // ---------- UTILS ----------
+    private static bool TryParseTime(string? s, out DateTime dt)
+    {
+        dt = default;
+        if (string.IsNullOrWhiteSpace(s)) return false;
+
+        // Example: 2025-10-22T22:06:10-04:00
+        if (DateTimeOffset.TryParseExact(
+                s.Trim(),
+                "yyyy-MM-dd'T'HH:mm:sszzz",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var dto))
+        {
+            dt = dto.LocalDateTime;
+            return true;
+        }
+        return false;
+    }
+
     private sealed class GeoPosition { public double lat { get; set; } public double lon { get; set; } public double? accuracy { get; set; } }
 }
