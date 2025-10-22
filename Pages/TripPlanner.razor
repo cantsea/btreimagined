@@ -4,5 +4,205 @@
 @using System.Text.Json
 @using System.Xml.Linq
 @inject HttpClient Http
+@inject IJSRuntime JS
 
-<PageTitle>Trip Planner, Coming Soon!</PageTitle>
+<PageTitle>Trip Planner</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-6">
+    <MudPaper Class="pa-4">
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.h5">Find stops near you</MudText>
+
+            <MudStack Direction="Row" Spacing="2" AlignItems="AlignItems.Center">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="UseMyLocation" Disabled="@_busy">
+                    @(_busy ? "Locating..." : "Use my location")
+                </MudButton>
+                <MudText Color="Color.Secondary">@_status</MudText>
+            </MudStack>
+
+            <MudDivider Class="my-2" />
+
+            <MudStack Direction="Row" Spacing="2" AlignItems="AlignItems.End">
+                <MudTextField @bind-Value="_lat" Label="Latitude" Variant="Variant.Filled" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Place" Style="max-width:260px" />
+                <MudTextField @bind-Value="_lon" Label="Longitude" Variant="Variant.Filled" Style="max-width:260px" />
+                <MudNumericField @bind-Value="_noOfStops" Min="1" Max="20" Label="# Stops" Variant="Variant.Filled" Style="max-width:160px" />
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="SearchManual" Disabled="@_busy">Search</MudButton>
+            </MudStack>
+
+            @if (_loading)
+            {
+                <MudStack AlignItems="AlignItems.Center" JustifyContent="Center" Style="min-height: 20vh;">
+                    <MudProgressCircular Indeterminate="true" />
+                </MudStack>
+            }
+            else if (_stops.Count > 0)
+            {
+                <MudDataGrid T="StopRow"
+                             Items="_stops"
+                             Dense="true" Bordered="true" Striped="true" Hover="true" ReadOnly="true">
+                    <Columns>
+                        <PropertyColumn T="StopRow" TProperty="string" Title="Stop" Property="@(s => s.Name)" />
+                        <PropertyColumn T="StopRow" TProperty="string" Title="Code" Property="@(s => s.Code)" />
+                        <PropertyColumn T="StopRow" TProperty="double" Title="Distance (m)" Property="@(s => s.DistanceMeters)" />
+                    </Columns>
+                    <PagerContent>
+                        <MudDataGridPager PageSizeOptions="new int[] { 5, 10 }" />
+                    </PagerContent>
+                </MudDataGrid>
+            }
+            else if (!_loading && _searched)
+            {
+                <MudAlert Severity="Severity.Info">No nearby stops found.</MudAlert>
+            }
+        </MudStack>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    // ---------- CONFIG ----------
+    private const string WorkerBase = "https://blue-disk-457f.fionncmurphy.workers.dev/api/bt4u";
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+
+    // ---------- MODEL ----------
+    private sealed record StopRow(string Code, string Name, double DistanceMeters);
+
+    // ---------- STATE ----------
+    private bool _busy;
+    private bool _loading;
+    private bool _searched;
+    private string _status = "";
+    private string _lat = "";
+    private string _lon = "";
+    private int _noOfStops = 10;
+    private readonly List<StopRow> _stops = new();
+
+    // ---------- UI ACTIONS ----------
+    private async Task UseMyLocation()
+    {
+        _busy = true; _status = "Requesting permission…"; StateHasChanged();
+        try
+        {
+            // load JS module once per page
+            var mod = await JS.InvokeAsync<IJSObjectReference>("import", "./js/geo.js");
+            var perm = await mod.InvokeAsync<string>("permissionStatus");
+            if (perm == "denied") { _status = "Location permission denied."; _busy = false; return; }
+
+            var pos = await mod.InvokeAsync<GeoPosition>("getPosition", new { enableHighAccuracy = true, timeout = 10000, maximumAge = 0 });
+            _lat = pos.lat.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            _lon = pos.lon.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            _status = $"Got location (±{pos.accuracy?.ToString("0")} m). Searching…";
+
+            await QueryNearestStops(pos.lat, pos.lon, _noOfStops);
+        }
+        catch (JSException jse)
+        {
+            _status = $"Location error: {jse.Message}";
+        }
+        catch (Exception ex)
+        {
+            _status = $"Location error.";
+            Console.Error.WriteLine(ex);
+        }
+        finally { _busy = false; StateHasChanged(); }
+    }
+
+    private async Task SearchManual()
+    {
+        if (!double.TryParse(_lat, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var lat) ||
+            !double.TryParse(_lon, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var lon))
+        {
+            _status = "Enter valid latitude/longitude."; return;
+        }
+        await QueryNearestStops(lat, lon, _noOfStops);
+    }
+
+    // ---------- DATA ----------
+    private async Task QueryNearestStops(double lat, double lon, int noOfStops)
+    {
+        _loading = true; _searched = true; _stops.Clear(); StateHasChanged();
+        try
+        {
+            using var cts = new CancellationTokenSource(RequestTimeout);
+
+            var url = $"{WorkerBase}?method=GetNearestStops" +
+                      $"&latitude={lat.ToString(System.Globalization.CultureInfo.InvariantCulture)}" +
+                      $"&longitude={lon.ToString(System.Globalization.CultureInfo.InvariantCulture)}" +
+                      $"&noOfStops={noOfStops}" +
+                      $"&serviceDate={DateTime.Today:yyyy-MM-dd}";
+
+            var root = await Http.GetFromJsonAsync<JsonElement>(url, cts.Token);
+            var rows = ParseNearestStops(root);
+            _stops.AddRange(rows.OrderBy(s => s.DistanceMeters));
+            _status = $"Found {_stops.Count} stop(s).";
+        }
+        catch
+        {
+            _status = "Failed to fetch nearest stops.";
+        }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    // ---------- PARSER ----------
+    private static List<StopRow> ParseNearestStops(JsonElement root)
+    {
+        var list = new List<StopRow>();
+
+        // JSON array form
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var row in root.EnumerateArray())
+            {
+                string code = "", name = "";
+                double dist = double.NaN;
+
+                foreach (var p in row.EnumerateObject())
+                {
+                    if (p.Value.ValueKind == JsonValueKind.String)
+                    {
+                        if (p.Name.Equals("StopCode", StringComparison.OrdinalIgnoreCase) || p.Name.Equals("Code", StringComparison.OrdinalIgnoreCase))
+                            code = p.Value.GetString() ?? "";
+                        else if (p.Name.Contains("Name", StringComparison.OrdinalIgnoreCase))
+                            name = p.Value.GetString() ?? "";
+                    }
+                    else if (p.Value.ValueKind == JsonValueKind.Number)
+                    {
+                        if (p.Name.Contains("Distance", StringComparison.OrdinalIgnoreCase) &&
+                            p.Value.TryGetDouble(out var d)) dist = d;
+                    }
+                }
+                if (!string.IsNullOrWhiteSpace(code) || !string.IsNullOrWhiteSpace(name))
+                    list.Add(new StopRow(code, name, double.IsNaN(dist) ? double.PositiveInfinity : dist));
+            }
+            return list;
+        }
+
+        // XML wrapper form
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("xml", out var xmlNode))
+        {
+            var xml = xmlNode.GetString() ?? "";
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                var x = XDocument.Parse(xml);
+                foreach (var n in x.Descendants())
+                {
+                    var code = n.Element("StopCode")?.Value?.Trim() ?? n.Element("Code")?.Value?.Trim();
+                    var name = n.Element("StopName")?.Value?.Trim()
+                             ?? n.Element("Name")?.Value?.Trim()
+                             ?? n.Element("Description")?.Value?.Trim()
+                             ?? "";
+                    double dist = double.PositiveInfinity;
+                    var dstr = n.Element("Distance")?.Value?.Trim() ?? n.Element("DistanceMeters")?.Value?.Trim();
+                    if (!string.IsNullOrWhiteSpace(dstr)) _ = double.TryParse(dstr, out dist);
+
+                    if (!string.IsNullOrWhiteSpace(code) || !string.IsNullOrWhiteSpace(name))
+                        list.Add(new StopRow(code ?? "", name, dist));
+                }
+            }
+        }
+
+        return list;
+    }
+
+    // ---------- interop DTO ----------
+    private sealed class GeoPosition { public double lat { get; set; } public double lon { get; set; } public double? accuracy { get; set; } }
+}
